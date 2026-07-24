@@ -171,6 +171,24 @@ FFResult FFGLTouchEngineFX::ProcessOpenGL(ProcessOpenGLStruct* pGL)
 		shader.Set("MaxUV", 1.0f, 1.0f);
 		quad.Draw();
 #endif
+#ifdef __APPLE__
+		// Persist the last valid TE output while the engine is mid-cook or not yet
+		// ready. Without this the FX draws nothing and returns FF_FAIL, so Resolume
+		// shows a transparent frame on every busy frame -> constant flicker on heavy
+		// toxes. Redraw the cached IOSurface-backed frame and report success so the
+		// host keeps the previous image. Falls through to FF_FAIL only when we have
+		// no cached frame yet (e.g. during the very first load).
+		if (OutputTextureGL != 0) {
+			ffglex::ScopedShaderBinding shaderBinding(rectShader.GetGLID());
+			ffglex::ScopedSamplerActivation activateSampler(0);
+			glBindTexture(GL_TEXTURE_RECTANGLE, OutputTextureGL);
+			rectShader.Set("InputTexture", 0);
+			rectShader.Set("TextureSize", (float)OutputWidth, (float)OutputHeight);
+			quad.Draw();
+			glBindTexture(GL_TEXTURE_RECTANGLE, 0);
+			return FF_SUCCESS;
+		}
+#endif
 		return FF_FAIL;
 	}
 
@@ -186,10 +204,19 @@ FFResult FFGLTouchEngineFX::ProcessOpenGL(ProcessOpenGLStruct* pGL)
 		return FF_FAIL;
 	}
 
-	shader.Set("InputTexture", 0);
-	FFGLTexCoords maxCoords = GetMaxGLTexCoords(*pGL->inputTextures[0]);
-	shader.Set("MaxUV", maxCoords.s, maxCoords.t);
-	quad.Draw();
+	// Draw the input as the base pass. This needs the shader and the input texture
+	// actually bound; previously the uniforms/draw ran with no program or texture
+	// bound (a no-op / garbage draw on both platforms). Any TE output is drawn over
+	// this below, so it only shows through until TE produces its first frame.
+	{
+		ffglex::ScopedShaderBinding shaderBinding(shader.GetGLID());
+		ffglex::ScopedSamplerActivation activateSampler(0);
+		ffglex::Scoped2DTextureBinding textureBinding(pGL->inputTextures[0]->Handle);
+		shader.Set("InputTexture", 0);
+		FFGLTexCoords maxCoords = GetMaxGLTexCoords(*pGL->inputTextures[0]);
+		shader.Set("MaxUV", maxCoords.s, maxCoords.t);
+		quad.Draw();
+	}
 
 	if (hasVideoOutput) {
 		TouchObject<TETexture> TETextureToSend;

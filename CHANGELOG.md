@@ -1,0 +1,68 @@
+# Changelog — drmbt/FFGLTouchEngine fork
+
+All changes on this fork relative to upstream
+[medcelerate/FFGLTouchEngine](https://github.com/medcelerate/FFGLTouchEngine)
+v2.0.4, newest first. Maintained per-commit so it can seed an eventual
+upstream PR description. Full investigation notes live in
+[docs/knowledge/](docs/knowledge/README.md).
+
+## Unreleased / branch `modernize-te`
+
+### Fixed
+- **macOS red/blue channel swap** (`7fef691`): removed the `.bgra` swizzle from
+  both plugins' output shaders. The IOSurface→GL binding
+  (`CGLTexImageIOSurface2D` with `GL_BGRA` + `GL_UNSIGNED_INT_8_8_8_8_REV`)
+  already yields correct RGBA when sampling, so the swizzle double-corrected —
+  every TE output frame had red and blue exchanged on macOS.
+- **Menu ParamID collision** (`7fef691`): a second menu parameter previously
+  collapsed into the first (one FFGL slot drove both TE menus, the second menu
+  never appeared). ParamIDs are now allocated from per-family counters instead
+  of `ParameterMap*.size()` arithmetic; menus store their initial value and
+  `GetFloatParameter` handles `FF_TYPE_OPTION`, so menus report real values
+  before first interaction.
+- **Spurious load error on fresh instances** (`7fef691`): `LoadTEFile` is
+  guarded against an empty tox path, which used to log
+  `TEInstanceLoad failed for ''` at every plugin instantiation.
+- **macOS FX transparent-frame flicker** (`06697a9`): the busy/not-ready path
+  in `TouchEngineFX::ProcessOpenGL` drew nothing and returned `FF_FAIL`
+  whenever TouchEngine was mid-cook. It now redraws the cached
+  IOSurface-backed last frame and returns `FF_SUCCESS`; the input base-pass
+  draw also gained the previously missing shader/texture bindings.
+  Live-verified: no flicker under continuous cooking.
+- **Enumeration fragility** (`06697a9`): a failed group read aborted the whole
+  parameter walk (dropping every parameter after it) and a failed value read
+  could leave a half-registered parameter that spammed
+  `Failed to set double value` every frame. Group/link failures now log and
+  skip only the affected link; every branch reads all TE values before
+  registering; unknown/future `TELinkType`s are logged and skipped; TE load
+  errors are surfaced via `FFGLLog` with `TEResultGetDescription`.
+
+### Changed
+- **Unique FFGL slot names — breaking for saved compositions** (`7fef691`):
+  pre-allocated slots renamed from `Parameter<N>`/`Color`/`Pulse` to
+  `Float1–40`, `Int1–40`, `Toggle1–40`, `Text1–40`, `Menu1–40`,
+  `Color1R/G/B/A`–`Color10R/G/B/A`, giving every parameter a distinct
+  OSC/REST address. Event slots intentionally all remain `Pulse` (the static
+  name is the host's button caption and FFGL cannot rename it dynamically);
+  their rows still show TD labels via display names. Compositions saved
+  against the old slot names will not restore parameter values.
+- **TouchEngine.framework updated** (`7bacc42`) to Derivative
+  TouchEngine-macOS @ `c3ceb1a` (2025-06-13), replacing the 2023-era
+  framework bundled with v2.0.4.
+
+### Added
+- **Knowledge base** (`9c8cf98`): `docs/knowledge/` — issues audit, codebase
+  and FFGL SDK notes, sprint plan, per-session test results, session handoff.
+
+### Known issues (tracked, not yet fixed)
+- Float/int sliders clamp to the FFGL prototype range (floats 0–1); TD
+  defaults above 1.0 display correctly until first interaction, then clamp.
+  Fix planned: remap host wire 0–1 ↔ TD min/max plus `GetParameterDisplay`.
+- Pulsing **Reload** on a playing FX clip can segfault the host: TE link
+  invalidation races the render thread's per-frame texture push. Fix planned:
+  mutex around parameter/link state (prerequisite for dynamic values, #28).
+- A failed/cancelled TE load leaves registered params pushing into the dead
+  instance (per-frame `Failed to set double value` log spam).
+- RGBA parameters render as 4 separate faders rather than Resolume's native
+  color picker UI.
+- Hardcoded 60 fps (#17); 32-bit tox renders corrupted on macOS (#12).

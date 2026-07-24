@@ -254,6 +254,7 @@ bool FFGLTouchEnginePluginBase::LoadTEGraphicsContext(bool reload) {
 
 bool FFGLTouchEnginePluginBase::LoadTEFile()
 {
+	std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
 	// Load the tox file into the TouchEngine
 	// 1. Create a TouchEngine object
 
@@ -351,6 +352,7 @@ double FFGLTouchEnginePluginBase::DenormalizeFromHost(FFUInt32 paramID, double h
 }
 
 FFResult FFGLTouchEnginePluginBase::SetFloatParameter(unsigned int dwIndex, float value) {
+	std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
 
 	if (dwIndex == 1 && value == 1) {
 		LoadTouchEngine();
@@ -406,6 +408,7 @@ FFResult FFGLTouchEnginePluginBase::SetFloatParameter(unsigned int dwIndex, floa
 }
 
 FFResult FFGLTouchEnginePluginBase::SetTextParameter(unsigned int dwIndex, const char* value) {
+	std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
 	switch (dwIndex) {
 	case 0:
 		// Open file dialog
@@ -426,6 +429,7 @@ FFResult FFGLTouchEnginePluginBase::SetTextParameter(unsigned int dwIndex, const
 }
 
 float FFGLTouchEnginePluginBase::GetFloatParameter(unsigned int dwIndex) {
+	std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
 
 	if (dwIndex == 1) {
 		return 0;
@@ -454,6 +458,7 @@ float FFGLTouchEnginePluginBase::GetFloatParameter(unsigned int dwIndex) {
 }
 
 char* FFGLTouchEnginePluginBase::GetParameterDisplay(unsigned int index) {
+	std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
 	// Show real TD-side values for remapped slots; the host's own readout would
 	// otherwise print the normalized 0-1 wire value.
 	if (ActiveParams.find(index) != ActiveParams.end()) {
@@ -467,6 +472,7 @@ char* FFGLTouchEnginePluginBase::GetParameterDisplay(unsigned int index) {
 }
 
 char* FFGLTouchEnginePluginBase::GetTextParameter(unsigned int dwIndex) {
+	std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
 	if (dwIndex == 0) {
 		return (char*)FilePath.c_str();
 	}
@@ -569,6 +575,7 @@ void FFGLTouchEnginePluginBase::ResetBaseParameters() {
 }
 
 void FFGLTouchEnginePluginBase::GetAllParameters() {
+	std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
 	ResetBaseParameters();
 
 	TouchObject<TEStringArray> groupLinkInfo;
@@ -1031,6 +1038,7 @@ void FFGLTouchEnginePluginBase::CreateParametersFromGroup(const TouchObject<TELi
 
 FFResult FFGLTouchEnginePluginBase::PushParametersToTouchEngine()
 {
+	std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
 	if (instance == nullptr) {
 		return FF_SUCCESS;
 	}
@@ -1108,6 +1116,15 @@ void FFGLTouchEnginePluginBase::eventCallback(TEEvent event, TEResult result, in
 		return;
 	}
 
+	// Atomic-only fast path: never let frame completion wait on the state
+	// mutex while the render thread holds it through a frame section.
+	if (event == TEEventFrameDidFinish) {
+		isTouchFrameBusy = false;
+		return;
+	}
+
+	std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
+
 	if (result == TEResultComponentErrors) {
 		TouchObject<TEErrorArray> errors;
 		TEResult result = TEInstanceGetErrors(instance, errors.take());
@@ -1154,9 +1171,6 @@ void FFGLTouchEnginePluginBase::eventCallback(TEEvent event, TEResult result, in
 		} else {
 			FFGLLog::LogToHost("Failed to load TE graphics context");
 		}
-		break;
-	case TEEventFrameDidFinish:
-		isTouchFrameBusy = false;
 		break;
 	case TEEventInstanceReady:
 		isTouchEngineReady = true;

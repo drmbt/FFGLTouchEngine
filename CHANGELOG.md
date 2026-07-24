@@ -9,6 +9,15 @@ upstream PR description. Full investigation notes live in
 ## Unreleased / branch `modernize-te`
 
 ### Fixed
+- **Reload segfault / TE thread races**: a recursive mutex now serializes the
+  TE instance lifecycle (load/unload/reload/clear), parameter-map mutation
+  (enumeration runs on the TE callback thread), and the render thread's
+  per-frame TE section in both plugins. Previously, pulsing Reload on a
+  playing FX clip could crash the host (`TEInstanceLinkSetTextureValue` on a
+  freed link from the render thread) and failed loads left params pushing
+  into dead instances every frame. Frame-completion events bypass the lock
+  (atomic flag) so TE cook completion never waits on a held frame section.
+  This is also the prerequisite for dynamic parameter updates (#28).
 - **Float sliders clamped TD values to the 0–1 prototype range**: the FFGL
   wire now carries a normalized 0–1 position and the plugin remaps it against
   the TD-side range on both directions (`ParameterRanges`, populated at
@@ -69,11 +78,6 @@ upstream PR description. Full investigation notes live in
   and FFGL SDK notes, sprint plan, per-session test results, session handoff.
 
 ### Known issues (tracked, not yet fixed)
-- Pulsing **Reload** on a playing FX clip can segfault the host: TE link
-  invalidation races the render thread's per-frame texture push. Fix planned:
-  mutex around parameter/link state (prerequisite for dynamic values, #28).
-- A failed/cancelled TE load leaves registered params pushing into the dead
-  instance (per-frame `Failed to set double value` log spam).
 - RGBA parameters render as 4 separate faders rather than Resolume's native
   color picker UI.
 - Hardcoded 60 fps (#17); 32-bit tox renders corrupted on macOS (#12).

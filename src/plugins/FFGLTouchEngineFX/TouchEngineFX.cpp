@@ -162,6 +162,7 @@ FFResult FFGLTouchEngineFX::InitGL(const FFGLViewportStruct* vp)
 
 FFResult FFGLTouchEngineFX::ProcessOpenGL(ProcessOpenGLStruct* pGL)
 {
+	std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
 
 	if (instance == nullptr || !isTouchEngineLoaded || !isTouchEngineReady || isTouchFrameBusy)
 	{
@@ -537,6 +538,7 @@ FFResult FFGLTouchEngineFX::ProcessOpenGL(ProcessOpenGLStruct* pGL)
 
 FFResult FFGLTouchEngineFX::DeInitGL()
 {
+	std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
 
 #ifdef _WIN32
 	for (auto it : TextureMutexMap)
@@ -700,6 +702,7 @@ void FFGLTouchEngineFX::HandleOperatorLink(const TouchObject<TELinkInfo>& linkIn
 
 
 void FFGLTouchEngineFX::ResumeTouchEngine() {
+	std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
 	TEResult result = TEInstanceResume(instance);
 	if (result != TEResultSuccess)
 	{
@@ -712,6 +715,7 @@ void FFGLTouchEngineFX::ResumeTouchEngine() {
 }
 
 void FFGLTouchEngineFX::ClearTouchInstance() {
+	std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
 	if (instance != nullptr)
 	{
 		if (isTouchEngineLoaded)

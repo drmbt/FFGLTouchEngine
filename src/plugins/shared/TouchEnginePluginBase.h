@@ -25,6 +25,7 @@
 
 #include "FFGL/FFGLSDK.h"
 #include <map>
+#include <mutex>
 #include <string>
 #include "TouchEngine/TouchObject.h"
 
@@ -122,6 +123,18 @@ protected:
 	IOSurfaceRef CreateIOSurface(int width, int height);
 #endif
 	GLint GLFormat = 0;
+
+	// Serializes TE instance lifecycle (load/unload/reload), parameter map
+	// mutation (enumeration on the TE callback thread), and the render thread's
+	// per-frame TE section. TE callbacks race the render thread otherwise —
+	// observed as a segfault when Reload invalidated links mid-frame
+	// (TEInstanceLinkSetTextureValue on a freed link) and as per-frame pushes
+	// into dead instances after failed loads. Recursive because lifecycle
+	// paths nest (SetFloatParameter -> LoadTEFile, eventCallback ->
+	// ResumeTouchEngine -> GetAllParameters -> ResetBaseParameters). All TE
+	// load/unload calls under it are asynchronous, so worst-case hold time is
+	// milliseconds. Never hold it while blocking on TE completion.
+	std::recursive_mutex TEStateMutex;
 
 	std::atomic_bool isTouchEngineLoaded;
 	std::atomic_bool isTouchEngineReady;

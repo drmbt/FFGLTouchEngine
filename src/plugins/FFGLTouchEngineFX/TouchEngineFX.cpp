@@ -69,8 +69,10 @@ out vec4 fragColor;
 void main()
 {
 	vec4 color = texture( InputTexture, uv );
-	// IOSurface comes as BGRA, swizzle to RGBA
-	fragColor = color.bgra;
+	// No swizzle: CGLTexImageIOSurface2D binds the BGRA IOSurface with
+	// GL_BGRA + GL_UNSIGNED_INT_8_8_8_8_REV, so sampling already yields RGBA.
+	// A .bgra here double-corrects and swaps red/blue.
+	fragColor = color;
 }
 )";
 #endif

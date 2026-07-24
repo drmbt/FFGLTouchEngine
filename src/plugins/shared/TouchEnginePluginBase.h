@@ -145,6 +145,18 @@ protected:
 	std::unordered_map<FFUInt32, std::string> ParameterMapString;
 	std::unordered_map<FFUInt32, bool> ParameterMapBool;
 	std::set<FFUInt32> PulseParameters;
+
+	// Per-family slot counters. Each family owns a contiguous pre-allocated
+	// region of MaxParamsByType slots; IDs are familyBase + counter. These must
+	// never be derived from ParameterMap*.size() — those maps mix families (and
+	// gain entries on host interaction), which is how two menus ended up sharing
+	// one ParamID.
+	uint32_t FloatParamCount = 0;
+	uint32_t IntParamCount = 0;
+	uint32_t BoolParamCount = 0;
+	uint32_t StringParamCount = 0;
+	uint32_t EventParamCount = 0;
+	uint32_t MenuParamCount = 0;
 	uint32_t ColorParamCount = 0;
 
 	std::set<FFUInt32> ActiveVectorParams;

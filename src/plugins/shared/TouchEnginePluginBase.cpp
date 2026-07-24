@@ -262,6 +262,12 @@ bool FFGLTouchEnginePluginBase::LoadTEFile()
 		return false;
 	}
 
+	// No tox assigned yet (fresh instance): nothing to load, and attempting it
+	// would log a spurious "TEInstanceLoad failed for ''".
+	if (FilePath.empty()) {
+		return false;
+	}
+
 	isTouchEngineReady = false;
 
 	// 2. Load the tox file into the TouchEngine
@@ -406,7 +412,7 @@ float FFGLTouchEnginePluginBase::GetFloatParameter(unsigned int dwIndex) {
 
 	FFUInt32 type = ParameterMapType[dwIndex];
 
-	if (type == FF_TYPE_INTEGER) {
+	if (type == FF_TYPE_INTEGER || type == FF_TYPE_OPTION) {
 		return static_cast<float>(ParameterMapInt[dwIndex]);
 	}
 
@@ -435,37 +441,47 @@ char* FFGLTouchEnginePluginBase::GetTextParameter(unsigned int dwIndex) {
 }
 
 void FFGLTouchEnginePluginBase::ConstructBaseParameters() {
+	// Every slot gets a unique static name ("Float1", "Pulse3", "Color2R", ...).
+	// Hosts derive OSC/REST addresses and event-button captions from this name
+	// and there is no FFGL event to change it later, so duplicates here mean
+	// colliding OSC addresses no display-name event can repair. TD labels are
+	// applied on top per-slot via SetParamDisplayName during enumeration.
 	for (uint32_t i = OffsetParamsByType; i < MaxParamsByType + OffsetParamsByType; i++) {
-		SetParamInfof(i, (std::string("Parameter") + std::to_string(i)).c_str(), FF_TYPE_STANDARD);
+		SetParamInfof(i, (std::string("Float") + std::to_string(i - OffsetParamsByType + 1)).c_str(), FF_TYPE_STANDARD);
 		SetParamVisibility(i, false, false);
 	}
 
 
 	for (uint32_t i = MaxParamsByType + OffsetParamsByType; i < (MaxParamsByType * 2) + OffsetParamsByType; i++) {
-		SetParamInfof(i, (std::string("Parameter") + std::to_string(i)).c_str(), FF_TYPE_INTEGER);
+		SetParamInfof(i, (std::string("Int") + std::to_string(i - MaxParamsByType - OffsetParamsByType + 1)).c_str(), FF_TYPE_INTEGER);
 		SetParamRange(i, -10000, 10000);
 		SetParamVisibility(i, false, false);
 	}
 
 	for (uint32_t i = (MaxParamsByType * 2) + OffsetParamsByType; i < (MaxParamsByType * 3) + OffsetParamsByType; i++) {
-		SetParamInfof(i, (std::string("Parameter") + std::to_string(i)).c_str(), FF_TYPE_BOOLEAN);
+		SetParamInfof(i, (std::string("Toggle") + std::to_string(i - (MaxParamsByType * 2) - OffsetParamsByType + 1)).c_str(), FF_TYPE_BOOLEAN);
 		SetParamVisibility(i, false, false);
 	}
 
 
 	for (uint32_t i = (MaxParamsByType * 3) + OffsetParamsByType; i < (MaxParamsByType * 4) + OffsetParamsByType; i++) {
-		SetParamInfof(i, (std::string("Parameter") + std::to_string(i)).c_str(), FF_TYPE_TEXT);
+		SetParamInfof(i, (std::string("Text") + std::to_string(i - (MaxParamsByType * 3) - OffsetParamsByType + 1)).c_str(), FF_TYPE_TEXT);
 		SetParamVisibility(i, false, false);
 	}
 
 
+	// Event slots deliberately all share the name "Pulse": the host renders the
+	// static name as the button caption and FFGL has no event to rename it, so
+	// "Pulse1"/"Pulse2" captions read as noise next to the TD row labels. The
+	// cost is that name-keyed host surfaces (OSC/REST) can only address the
+	// first event slot.
 	for (uint32_t i = (MaxParamsByType * 4) + OffsetParamsByType; i < (MaxParamsByType * 5) + OffsetParamsByType; i++) {
 		SetParamInfof(i, (std::string("Pulse")).c_str(), FF_TYPE_EVENT);
 		SetParamVisibility(i, false, false);
 	}
 
 	for (uint32_t i = (MaxParamsByType * 5) + OffsetParamsByType; i < (MaxParamsByType * 6) + OffsetParamsByType; i++) {
-		SetOptionParamInfo(i, (std::string("Parameter") + std::to_string(i)).c_str(), 10, 0);
+		SetOptionParamInfo(i, (std::string("Menu") + std::to_string(i - (MaxParamsByType * 5) - OffsetParamsByType + 1)).c_str(), 10, 0);
 		SetParamVisibility(i, false, false);
 	}
 
@@ -473,10 +489,11 @@ void FFGLTouchEnginePluginBase::ConstructBaseParameters() {
 	// Each color uses 4 consecutive param slots
 	uint32_t colorBase = (MaxParamsByType * 6) + OffsetParamsByType;
 	for (uint32_t i = 0; i < MaxParamsByType; i += 4) {
-		SetParamInfo(colorBase + i,     "Color", FF_TYPE_RED,        0.0f);
-		SetParamInfo(colorBase + i + 1, "Color", FF_TYPE_GREEN,      0.0f);
-		SetParamInfo(colorBase + i + 2, "Color", FF_TYPE_BLUE,       0.0f);
-		SetParamInfo(colorBase + i + 3, "Color", FF_TYPE_ALPHA,      1.0f);
+		std::string colorName = std::string("Color") + std::to_string(i / 4 + 1);
+		SetParamInfo(colorBase + i,     (colorName + "R").c_str(), FF_TYPE_RED,   0.0f);
+		SetParamInfo(colorBase + i + 1, (colorName + "G").c_str(), FF_TYPE_GREEN, 0.0f);
+		SetParamInfo(colorBase + i + 2, (colorName + "B").c_str(), FF_TYPE_BLUE,  0.0f);
+		SetParamInfo(colorBase + i + 3, (colorName + "A").c_str(), FF_TYPE_ALPHA, 1.0f);
 		SetParamVisibility(colorBase + i,     false, false);
 		SetParamVisibility(colorBase + i + 1, false, false);
 		SetParamVisibility(colorBase + i + 2, false, false);
@@ -498,6 +515,12 @@ void FFGLTouchEnginePluginBase::ResetBaseParameters() {
 	ParameterMapString.clear();
 	ParameterMapBool.clear();
 	PulseParameters.clear();
+	FloatParamCount = 0;
+	IntParamCount = 0;
+	BoolParamCount = 0;
+	StringParamCount = 0;
+	EventParamCount = 0;
+	MenuParamCount = 0;
 	ColorParamCount = 0;
 	Parameters.clear();
 }
@@ -544,7 +567,7 @@ void FFGLTouchEnginePluginBase::GetAllParameters() {
 
 			if (linkInfo->domain == TELinkDomainParameter) {
 
-				if (ActiveParams.size() > MaxParamsByType * 6) {
+				if (ActiveParams.size() >= MaxParamsByType * 7) {
 					FFGLLog::LogToHost("Too many parameters, skipping");
 					continue;
 				}
@@ -670,6 +693,16 @@ void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELi
 				colorGroupBase = ColorParamCount; // already mid-group shouldn't happen, but advance
 			}
 
+			if (linkInfo->intent == TELinkIntentColorRGBA) {
+				if (colorGroupBase + 4 > MaxParamsByType) {
+					LogLinkSkip(linkInfo->identifier, "no free color slots");
+					return;
+				}
+			} else if (FloatParamCount + linkInfo->count > MaxParamsByType) {
+				LogLinkSkip(linkInfo->identifier, "no free float slots");
+				return;
+			}
+
 			for (uint32_t i = 0; i < linkInfo->count; i++) {
 				uint32_t ParamID;
 
@@ -678,7 +711,7 @@ void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELi
 					ParamID = (MaxParamsByType * 6) + OffsetParamsByType + colorGroupBase + i;
 					ParameterMapType[ParamID] = colorTypes[i];
 				} else {
-					ParamID = Parameters.size() + OffsetParamsByType;
+					ParamID = OffsetParamsByType + FloatParamCount++;
 					ParameterMapType[ParamID] = FF_TYPE_STANDARD;
 				}
 
@@ -725,7 +758,11 @@ void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELi
 			return;
 		}
 
-		uint32_t ParamID = Parameters.size() + OffsetParamsByType;
+		if (FloatParamCount >= MaxParamsByType) {
+			LogLinkSkip(linkInfo->identifier, "no free float slots");
+			return;
+		}
+		uint32_t ParamID = OffsetParamsByType + FloatParamCount++;
 		Parameters.push_back(std::make_pair(linkInfo->identifier, ParamID));
 		ActiveParams.insert(ParamID);
 		ParameterMapType[ParamID] = FF_TYPE_STANDARD;
@@ -756,7 +793,11 @@ void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELi
 				return;
 			}
 
-			uint32_t ParamID = (ParameterMapInt.size() + OffsetParamsByType) + (MaxParamsByType * 5);
+			if (MenuParamCount >= MaxParamsByType) {
+				LogLinkSkip(linkInfo->identifier, "no free menu slots");
+				return;
+			}
+			uint32_t ParamID = (MaxParamsByType * 5) + OffsetParamsByType + MenuParamCount++;
 
 			std::vector<std::string> labelsVector;
 			std::vector<float> valuesVector;
@@ -772,6 +813,7 @@ void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELi
 			ActiveParams.insert(ParamID);
 			SetParamDisplayName(ParamID, linkInfo->label, true);
 			ParameterMapType[ParamID] = FF_TYPE_OPTION;
+			ParameterMapInt[ParamID] = value;
 
 			RaiseParamEvent(ParamID, FF_EVENT_FLAG_VALUE);
 			SetParamVisibility(ParamID, true, true);
@@ -796,7 +838,11 @@ void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELi
 				return;
 			}
 
-			uint32_t ParamID = (ParameterMapInt.size() + OffsetParamsByType) + MaxParamsByType;
+			if (IntParamCount >= MaxParamsByType) {
+				LogLinkSkip(linkInfo->identifier, "no free int slots");
+				return;
+			}
+			uint32_t ParamID = MaxParamsByType + OffsetParamsByType + IntParamCount++;
 			Parameters.push_back(std::make_pair(linkInfo->identifier, ParamID));
 			ActiveParams.insert(ParamID);
 			ParameterMapType[ParamID] = FF_TYPE_INTEGER;
@@ -820,7 +866,11 @@ void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELi
 				return;
 			}
 
-			uint32_t ParamID = (ParameterMapBool.size() + OffsetParamsByType) + (MaxParamsByType * 4);
+			if (EventParamCount >= MaxParamsByType) {
+				LogLinkSkip(linkInfo->identifier, "no free event slots");
+				return;
+			}
+			uint32_t ParamID = (MaxParamsByType * 4) + OffsetParamsByType + EventParamCount++;
 			Parameters.push_back(std::make_pair(linkInfo->identifier, ParamID));
 			ActiveParams.insert(ParamID);
 			ParameterMapType[ParamID] = FF_TYPE_EVENT;
@@ -841,7 +891,11 @@ void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELi
 				return;
 			}
 
-			uint32_t ParamID = (ParameterMapBool.size() + OffsetParamsByType) + MaxParamsByType * 2;
+			if (BoolParamCount >= MaxParamsByType) {
+				LogLinkSkip(linkInfo->identifier, "no free toggle slots");
+				return;
+			}
+			uint32_t ParamID = (MaxParamsByType * 2) + OffsetParamsByType + BoolParamCount++;
 			Parameters.push_back(std::make_pair(linkInfo->identifier, ParamID));
 			ActiveParams.insert(ParamID);
 			ParameterMapType[ParamID] = FF_TYPE_BOOLEAN;
@@ -862,7 +916,11 @@ void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELi
 			return;
 		}
 
-		uint32_t ParamID = (ParameterMapString.size() + OffsetParamsByType) + MaxParamsByType * 3; //(MaxParamsByType * 3) + OffsetParamsByType
+		if (StringParamCount >= MaxParamsByType) {
+			LogLinkSkip(linkInfo->identifier, "no free text slots");
+			return;
+		}
+		uint32_t ParamID = (MaxParamsByType * 3) + OffsetParamsByType + StringParamCount++;
 		Parameters.push_back(std::make_pair(linkInfo->identifier, ParamID));
 		ActiveParams.insert(ParamID);
 		ParameterMapType[ParamID] = FF_TYPE_TEXT;

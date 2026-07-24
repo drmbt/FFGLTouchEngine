@@ -269,6 +269,11 @@ bool FFGLTouchEnginePluginBase::LoadTEFile()
 		return false;
 	}
 
+	if (isLoadPending) {
+		FFGLLog::LogToHost("FFGLTouchEngine: load already in progress — ignoring reload request");
+		return false;
+	}
+
 	isTouchEngineReady = false;
 
 	// 2. Load the tox file into the TouchEngine
@@ -302,6 +307,7 @@ bool FFGLTouchEnginePluginBase::LoadTEFile()
 		return false;
 	}
 
+	isLoadPending = true;
 
 	return true;
 }
@@ -388,21 +394,25 @@ FFResult FFGLTouchEnginePluginBase::SetFloatParameter(unsigned int dwIndex, floa
 
 	if (type == FF_TYPE_INTEGER) {
 		ParameterMapInt[dwIndex] = static_cast<int32_t>(value);
+		DirtyParams.insert(dwIndex);
 		return FF_SUCCESS;
 	}
 
 	if (type == FF_TYPE_BOOLEAN || type == FF_TYPE_EVENT) {
 		ParameterMapBool[dwIndex] = value;
+		DirtyParams.insert(dwIndex);
 		return FF_SUCCESS;
 	}
 
 	if (type == FF_TYPE_OPTION) {
 		ParameterMapInt[dwIndex] = static_cast<int32_t>(value);
+		DirtyParams.insert(dwIndex);
 		return FF_SUCCESS;
 	}
 
 
 	ParameterMapFloat[dwIndex] = DenormalizeFromHost(dwIndex, value);
+	DirtyParams.insert(dwIndex);
 
 	return FF_SUCCESS;
 }
@@ -425,6 +435,7 @@ FFResult FFGLTouchEnginePluginBase::SetTextParameter(unsigned int dwIndex, const
 		return FF_SUCCESS;
 	}
 	ParameterMapString[dwIndex] = value;
+	DirtyParams.insert(dwIndex);
 	return FF_SUCCESS;
 }
 
@@ -563,6 +574,7 @@ void FFGLTouchEnginePluginBase::ResetBaseParameters() {
 	ParameterMapString.clear();
 	ParameterMapBool.clear();
 	ParameterRanges.clear();
+	DirtyParams.clear();
 	PulseParameters.clear();
 	FloatParamCount = 0;
 	IntParamCount = 0;
@@ -1043,12 +1055,27 @@ FFResult FFGLTouchEnginePluginBase::PushParametersToTouchEngine()
 		return FF_SUCCESS;
 	}
 
-	for (auto& param : Parameters) {
-		FFUInt32 type = ParameterMapType[param.second];
+	// Push only host-modified parameters (#28): a blanket push every frame
+	// stomped TD-initiated value changes one frame after they happened, and
+	// re-sending TE-originated values would echo them back. Each dirty flag is
+	// consumed before its push attempt, so a dead link drops one value instead
+	// of logging every frame.
+	if (DirtyParams.empty()) {
+		return FF_SUCCESS;
+	}
 
+	for (auto& param : Parameters) {
 		if (ActiveVectorParams.find(param.second) != ActiveVectorParams.end()) {
+			continue; // vector children are pushed whole-vector below
+		}
+
+		auto dirty = DirtyParams.find(param.second);
+		if (dirty == DirtyParams.end()) {
 			continue;
 		}
+		DirtyParams.erase(dirty);
+
+		FFUInt32 type = ParameterMapType[param.second];
 
 		if (type == FF_TYPE_STANDARD) {
 			TEResult result = TEInstanceLinkSetDoubleValue(instance, param.first.c_str(), &ParameterMapFloat[param.second], 1);
@@ -1073,9 +1100,11 @@ FFResult FFGLTouchEnginePluginBase::PushParametersToTouchEngine()
 				isTouchFrameBusy = false;
 				return FailAndLog("Failed to set boolean value");
 			}
-			// Auto-reset pulse parameters to false after sending
+			// Auto-reset pulse parameters to false after sending, and mark
+			// them dirty again so the falling edge is pushed next frame.
 			if (ParameterMapBool[param.second] && PulseParameters.find(param.second) != PulseParameters.end()) {
 				ParameterMapBool[param.second] = false;
+				DirtyParams.insert(param.second);
 			}
 		}
 
@@ -1090,6 +1119,16 @@ FFResult FFGLTouchEnginePluginBase::PushParametersToTouchEngine()
 	}
 
 	for (auto& param : VectorParameters) {
+		bool dirty = false;
+		for (uint8_t i = 0; i < param.count; i++) {
+			if (DirtyParams.erase(param.children[i]) > 0) {
+				dirty = true;
+			}
+		}
+		if (!dirty) {
+			continue;
+		}
+
 		double values[4] = { 0,0,0,0 };
 
 		for (uint8_t i = 0; i < param.count; i++) {
@@ -1099,7 +1138,7 @@ FFResult FFGLTouchEnginePluginBase::PushParametersToTouchEngine()
 		TEResult result = TEInstanceLinkSetDoubleValue(instance, param.identifier.c_str(), values, param.count);
 		if (result != TEResultSuccess) {
 			isTouchFrameBusy = false;
-			return FailAndLog("Failed to set int value");
+			return FailAndLog("Failed to set vector value");
 		}
 
 	}
@@ -1156,24 +1195,34 @@ void FFGLTouchEnginePluginBase::eventCallback(TEEvent event, TEResult result, in
 	}
 	switch (event) {
 	case TEEventInstanceDidLoad:
+		isLoadPending = false;
 		if (result != TEResultSuccess) {
 			// Surface load failures (bad tox, or a tox authored in a newer TD build
-			// than this engine) instead of silently showing nothing.
+			// than this engine) instead of silently showing nothing. Do NOT resume
+			// or enumerate a failed load — that used to register parameters against
+			// a dead instance and push into it every frame.
 			const char* desc = TEResultGetDescription(result);
 			std::string msg = std::string("FFGLTouchEngine: instance failed to load — ") +
 				(desc ? desc : "unknown error") +
 				". Check the tox path and that the TouchEngine build is new enough for this tox.";
 			FFGLLog::LogToHost(msg.c_str());
+			break;
 		}
 		if (LoadTEGraphicsContext(false)) {
 			isTouchEngineLoaded = true;
 			ResumeTouchEngine();
+			// Render-ready only now: comp loaded, resumed, links enumerated.
+			isTouchEngineReady = true;
 		} else {
 			FFGLLog::LogToHost("Failed to load TE graphics context");
 		}
 		break;
 	case TEEventInstanceReady:
-		isTouchEngineReady = true;
+		// NOT render-readiness. Per TEInstanceConfigure docs this event means
+		// "configure completed, ready to load" — and during a reload the
+		// previously loaded comp has just been UNLOADED at this point. Treating
+		// it as render-ready resumed per-frame texture pushes into links that
+		// no longer exist and segfaulted the host inside TE (the Reload crash).
 		break;
 	case TEEventInstanceDidUnload:
 		isTouchEngineLoaded = false;
@@ -1189,7 +1238,137 @@ void FFGLTouchEnginePluginBase::linkCallback(TELinkEvent event, const char* iden
 	case TELinkEventAdded:
 		// A link has been added
 		break;
+	case TELinkEventRemoved:
+	{
+		// Safety net: if TE tears down a link we hold an identifier for (an
+		// engine-side rebuild we didn't initiate), stop the render thread from
+		// pushing into it. Readiness returns with the next enumeration
+		// (TEEventInstanceDidLoad). Holding the last frame beats a segfault
+		// inside TE's link table.
+		if (!isTouchEngineReady || identifier == nullptr) {
+			break;
+		}
+		std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
+		bool held = (InputOpName == identifier) || (OutputOpName == identifier);
+		if (!held) {
+			for (auto& param : Parameters) {
+				if (param.first == identifier) { held = true; break; }
+			}
+		}
+		if (held) {
+			isTouchEngineReady = false;
+			std::string msg = std::string("FFGLTouchEngine: link '") + identifier +
+				"' removed by engine — pausing output until parameters are re-enumerated";
+			FFGLLog::LogToHost(msg.c_str());
+		}
+		break;
+	}
 	case TELinkEventValueChange:
+	{
+		// #28: reflect TD-initiated value changes back to the host. Values are
+		// stored WITHOUT marking dirty (that is the echo guard — they must not
+		// be pushed back), and FF_EVENT_FLAG_VALUE makes the host re-query the
+		// slot (Resolume 7.4.0+). Our own pushes also land here; the equality
+		// checks make those a no-op.
+		if (!isTouchEngineReady || identifier == nullptr || instance == nullptr) {
+			break;
+		}
+		// Operator links (our own per-frame texture pushes on in1, cook results
+		// on out1) fire ValueChange every frame — skip them before taking the
+		// lock; only parameter links are reflected.
+		if (InputOpName == identifier || OutputOpName == identifier) {
+			break;
+		}
+		std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
+		if (!isTouchEngineReady) {
+			break; // re-check under the lock: a reload may have started while we waited
+		}
+
+		for (auto& vp : VectorParameters) {
+			if (vp.identifier != identifier) {
+				continue;
+			}
+			double value[4] = { 0, 0, 0, 0 };
+			if (TEInstanceLinkGetDoubleValue(instance, identifier, TELinkValueCurrent, value, vp.count) != TEResultSuccess) {
+				return;
+			}
+			for (uint8_t i = 0; i < vp.count; i++) {
+				if (ParameterMapFloat[vp.children[i]] == value[i]) {
+					continue;
+				}
+				ParameterMapFloat[vp.children[i]] = value[i];
+				auto range = ParameterRanges.find(vp.children[i]);
+				if (range != ParameterRanges.end()) {
+					range->second.first = std::min(range->second.first, value[i]);
+					range->second.second = std::max(range->second.second, value[i]);
+				}
+				RaiseParamEvent(vp.children[i], FF_EVENT_FLAG_VALUE);
+			}
+			return;
+		}
+
+		for (auto& param : Parameters) {
+			if (param.first != identifier) {
+				continue;
+			}
+			FFUInt32 ParamID = param.second;
+			switch (ParameterMapType[ParamID]) {
+			case FF_TYPE_STANDARD:
+			{
+				double value = 0;
+				if (TEInstanceLinkGetDoubleValue(instance, identifier, TELinkValueCurrent, &value, 1) == TEResultSuccess
+					&& ParameterMapFloat[ParamID] != value) {
+					ParameterMapFloat[ParamID] = value;
+					auto range = ParameterRanges.find(ParamID);
+					if (range != ParameterRanges.end()) {
+						range->second.first = std::min(range->second.first, value);
+						range->second.second = std::max(range->second.second, value);
+					}
+					RaiseParamEvent(ParamID, FF_EVENT_FLAG_VALUE);
+				}
+				break;
+			}
+			case FF_TYPE_INTEGER:
+			case FF_TYPE_OPTION:
+			{
+				int32_t value = 0;
+				if (TEInstanceLinkGetIntValue(instance, identifier, TELinkValueCurrent, &value, 1) == TEResultSuccess
+					&& ParameterMapInt[ParamID] != value) {
+					ParameterMapInt[ParamID] = value;
+					RaiseParamEvent(ParamID, FF_EVENT_FLAG_VALUE);
+				}
+				break;
+			}
+			case FF_TYPE_BOOLEAN:
+			{
+				bool value = false;
+				if (TEInstanceLinkGetBooleanValue(instance, identifier, TELinkValueCurrent, &value) == TEResultSuccess
+					&& ParameterMapBool[ParamID] != value) {
+					ParameterMapBool[ParamID] = value;
+					RaiseParamEvent(ParamID, FF_EVENT_FLAG_VALUE);
+				}
+				break;
+			}
+			case FF_TYPE_TEXT:
+			{
+				TouchObject<TEString> value;
+				if (TEInstanceLinkGetStringValue(instance, identifier, TELinkValueCurrent, value.take()) == TEResultSuccess
+					&& value && ParameterMapString[ParamID] != value->string) {
+					ParameterMapString[ParamID] = value->string;
+					RaiseParamEvent(ParamID, FF_EVENT_FLAG_VALUE);
+				}
+				break;
+			}
+			default:
+				// FF_TYPE_EVENT: host pulse buttons are stateless; a TD-side
+				// pulse has nothing to reflect.
+				break;
+			}
+			break;
+		}
+		break;
+	}
+	default:
 		break;
 	}
 }

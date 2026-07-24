@@ -8,7 +8,34 @@ upstream PR description. Full investigation notes live in
 
 ## Unreleased / branch `modernize-te`
 
+### Added
+- **Dynamic parameter updates (#28)**: TD-initiated value changes now reach
+  the host. `PushParametersToTouchEngine` pushes only host-modified (dirty)
+  parameters instead of every parameter every frame — the blanket push was
+  stomping TD-side changes one frame after they happened — and
+  `TELinkEventValueChange` reads the changed link back into the parameter
+  maps and raises `FF_EVENT_FLAG_VALUE` so the host re-queries the slot
+  (Resolume 7.4.0+). TE-originated values are stored without dirtying, which
+  is the echo guard. Effective float ranges widen when TD pushes a value
+  outside the enumerated range.
+
 ### Fixed
+- **Reload segfaulted the host — root cause: `TEEventInstanceReady`
+  mis-semantics** (upstream bug, likely also behind #34-class instability).
+  Per the `TEInstanceConfigure` docs, `InstanceReady` means "configure
+  completed, ready to load" — and during a reload the previously loaded comp
+  has just been *unloaded* at that point. The plugin treated it as
+  render-ready, so per-frame texture pushes resumed into links that no longer
+  existed (`TEInstanceLinkSetTextureValue` → null link → SIGSEGV, reproduced
+  3× live). Render-readiness is now granted only after
+  `DidLoad(success) → Resume → enumeration`. Verified: three consecutive
+  Reloads on a playing FX clip, host alive, full re-enumeration each time.
+  Defense in depth added alongside: load requests are debounced while a load
+  is pending (`isLoadPending`), a `TELinkEventRemoved` safety net drops
+  readiness if TE tears down a link we hold (holds last frame instead of
+  crashing), and a failed load no longer resumes/enumerates a dead instance
+  (which was the remaining "Failed to set double value" spam source —
+  whole-log count after the gauntlet: zero).
 - **Reload segfault / TE thread races**: a recursive mutex now serializes the
   TE instance lifecycle (load/unload/reload/clear), parameter-map mutation
   (enumeration runs on the TE callback thread), and the render thread's

@@ -138,6 +138,12 @@ protected:
 
 	std::atomic_bool isTouchEngineLoaded;
 	std::atomic_bool isTouchEngineReady;
+	// True from a successful TEInstanceLoad until its TEEventInstanceDidLoad
+	// arrives. Reload/Unload pulses are ignored while set: configuring a second
+	// load onto an in-flight one makes TE free the first load's links after
+	// we've already enumerated them and gone ready — the render thread then
+	// pushes a dead link identifier and the host segfaults inside TE.
+	std::atomic_bool isLoadPending{ false };
 	std::atomic_bool isGraphicsContextLoaded;
 	std::atomic_bool isTouchFrameBusy;
 	std::atomic_bool isBeingDestroyed;
@@ -159,6 +165,12 @@ protected:
 	std::unordered_map<FFUInt32, std::string> ParameterMapString;
 	std::unordered_map<FFUInt32, bool> ParameterMapBool;
 	std::set<FFUInt32> PulseParameters;
+	// ParamIDs the HOST has modified since the last push. Pushing only these
+	// (instead of every parameter every frame) is what lets TD-initiated value
+	// changes survive (#28): a blanket push stomped them one frame later, and
+	// it doubles as the echo guard — values arriving FROM TouchEngine via
+	// linkCallback are stored without dirtying, so they are never pushed back.
+	std::set<FFUInt32> DirtyParams;
 
 	// Per-family slot counters. Each family owns a contiguous pre-allocated
 	// region of MaxParamsByType slots; IDs are familyBase + counter. These must
@@ -187,7 +199,8 @@ protected:
 	double DenormalizeFromHost(FFUInt32 paramID, double hostValue);
 	char DisplayBuffer[16] = { 0 };
 
-	//Texture Name
+	//Operator link identifiers (input is only set by FX-style toxes)
+	std::string InputOpName;
 	std::string OutputOpName;
 
 	int OutputWidth = 0;

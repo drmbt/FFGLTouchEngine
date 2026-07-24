@@ -69,6 +69,7 @@ public:
 
 	float GetFloatParameter(unsigned int index) override;
 	char* GetTextParameter(unsigned int index) override;
+	char* GetParameterDisplay(unsigned int index) override;
 
 protected:
 	FFResult InitializeDevice();
@@ -161,6 +162,17 @@ protected:
 
 	std::set<FFUInt32> ActiveVectorParams;
 	std::vector<VectorParameterInfo> VectorParameters;
+
+	// TD-side [min,max] per FF_TYPE_STANDARD slot. The FFGL wire and the host
+	// slider stay at the 0-1 prototype range (there is no FFGL range-change
+	// event, so the host can never learn a different one); ParameterMapFloat
+	// holds real TD values and these ranges convert at the Get/Set boundary.
+	// The range is widened to include the initial value so out-of-range
+	// defaults (e.g. an unranged TD float at 145) survive the round trip.
+	std::unordered_map<FFUInt32, std::pair<double, double>> ParameterRanges;
+	double NormalizeToHost(FFUInt32 paramID, double realValue);
+	double DenormalizeFromHost(FFUInt32 paramID, double hostValue);
+	char DisplayBuffer[16] = { 0 };
 
 	//Texture Name
 	std::string OutputOpName;

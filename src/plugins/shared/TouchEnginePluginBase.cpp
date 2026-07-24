@@ -321,6 +321,35 @@ void FFGLTouchEnginePluginBase::LoadTouchEngine() {
 
 }
 
+// Effective TD-side range for a slot: the UI range widened to include the
+// current value (unranged TD floats report a 0-1 UI hint while holding values
+// far outside it), degenerate ranges opened up so normalization never divides
+// by zero.
+static std::pair<double, double> EffectiveRange(double uiMin, double uiMax, double value) {
+	double lo = std::min(uiMin, value);
+	double hi = std::max(uiMax, value);
+	if (hi - lo < 1e-9) {
+		hi = lo + 1.0;
+	}
+	return { lo, hi };
+}
+
+double FFGLTouchEnginePluginBase::NormalizeToHost(FFUInt32 paramID, double realValue) {
+	auto it = ParameterRanges.find(paramID);
+	if (it == ParameterRanges.end()) {
+		return realValue;
+	}
+	return (realValue - it->second.first) / (it->second.second - it->second.first);
+}
+
+double FFGLTouchEnginePluginBase::DenormalizeFromHost(FFUInt32 paramID, double hostValue) {
+	auto it = ParameterRanges.find(paramID);
+	if (it == ParameterRanges.end()) {
+		return hostValue;
+	}
+	return it->second.first + hostValue * (it->second.second - it->second.first);
+}
+
 FFResult FFGLTouchEnginePluginBase::SetFloatParameter(unsigned int dwIndex, float value) {
 
 	if (dwIndex == 1 && value == 1) {
@@ -371,7 +400,7 @@ FFResult FFGLTouchEnginePluginBase::SetFloatParameter(unsigned int dwIndex, floa
 	}
 
 
-	ParameterMapFloat[dwIndex] = value;
+	ParameterMapFloat[dwIndex] = DenormalizeFromHost(dwIndex, value);
 
 	return FF_SUCCESS;
 }
@@ -421,7 +450,20 @@ float FFGLTouchEnginePluginBase::GetFloatParameter(unsigned int dwIndex) {
 	}
 
 
-	return static_cast<float>(ParameterMapFloat[dwIndex]);
+	return static_cast<float>(NormalizeToHost(dwIndex, ParameterMapFloat[dwIndex]));
+}
+
+char* FFGLTouchEnginePluginBase::GetParameterDisplay(unsigned int index) {
+	// Show real TD-side values for remapped slots; the host's own readout would
+	// otherwise print the normalized 0-1 wire value.
+	if (ActiveParams.find(index) != ActiveParams.end()) {
+		auto typeIt = ParameterMapType.find(index);
+		if (typeIt != ParameterMapType.end() && typeIt->second == FF_TYPE_STANDARD) {
+			snprintf(DisplayBuffer, sizeof(DisplayBuffer), "%.6g", ParameterMapFloat[index]);
+			return DisplayBuffer;
+		}
+	}
+	return CFFGLPlugin::GetParameterDisplay(index);
 }
 
 char* FFGLTouchEnginePluginBase::GetTextParameter(unsigned int dwIndex) {
@@ -514,6 +556,7 @@ void FFGLTouchEnginePluginBase::ResetBaseParameters() {
 	ParameterMapInt.clear();
 	ParameterMapString.clear();
 	ParameterMapBool.clear();
+	ParameterRanges.clear();
 	PulseParameters.clear();
 	FloatParamCount = 0;
 	IntParamCount = 0;
@@ -623,6 +666,15 @@ void FFGLTouchEnginePluginBase::GetAllParameters() {
 		}
 
 	}
+
+	// Re-raise value events now that the walk is complete. Enumeration runs on
+	// the TE callback thread while the host UI polls in parallel, so the host
+	// can consume a slot's event and cache a stale display string before that
+	// slot's registration finished; a final sweep forces a fresh query of every
+	// active parameter.
+	for (auto& ParamID : ActiveParams) {
+		RaiseParamEvent(ParamID, FF_EVENT_FLAG_VALUE);
+	}
 }
 
 void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELinkInfo>& linkInfo) {
@@ -721,8 +773,12 @@ void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELi
 				info.children[i] = ParamID;
 
 				ParameterMapFloat[ParamID] = value[i];
+				if (!(linkInfo->intent == TELinkIntentColorRGBA && i < 4)) {
+					// Color slots keep the native 0-1 wire; everything else
+					// remaps between the 0-1 prototype and the TD range.
+					ParameterRanges[ParamID] = EffectiveRange(min[i], max[i], value[i]);
+				}
 				SetParamDisplayName(ParamID, linkInfo->label + std::string(".") + Suffix[i], true);
-				SetParamRange(ParamID, min[i], max[i]);
 				RaiseParamEvent(ParamID, FF_EVENT_FLAG_VALUE);
 				SetParamVisibility(ParamID, true, true);
 
@@ -767,8 +823,8 @@ void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELi
 		ActiveParams.insert(ParamID);
 		ParameterMapType[ParamID] = FF_TYPE_STANDARD;
 		ParameterMapFloat[ParamID] = value;
+		ParameterRanges[ParamID] = EffectiveRange(min, max, value);
 		SetParamDisplayName(ParamID, linkInfo->label, true);
-		SetParamRange(ParamID, min, max);
 		RaiseParamEvent(ParamID, FF_EVENT_FLAG_VALUE);
 		SetParamVisibility(ParamID, true, true);
 

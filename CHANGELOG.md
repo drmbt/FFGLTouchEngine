@@ -9,6 +9,20 @@ upstream PR description. Full investigation notes live in
 ## Unreleased / branch `modernize-te`
 
 ### Fixed
+- **Float sliders clamped TD values to the 0–1 prototype range**: the FFGL
+  wire now carries a normalized 0–1 position and the plugin remaps it against
+  the TD-side range on both directions (`ParameterRanges`, populated at
+  enumeration and widened to include the initial value so out-of-range
+  defaults on unranged floats survive). Real TD values are shown in the host
+  readout via a `GetParameterDisplay` override. Color slots keep the native
+  0–1 wire; ints remain unscaled within the ±10000 prototype range.
+  OSC/MIDI/REST speak normalized positions (full range reachable; absolute
+  TD values require sender-side scaling). Limitations: an unranged float
+  cannot be pushed above its load-time value from the host, and the effective
+  range is frozen until the next tox load.
+- **Stale parameter display strings**: value events are re-raised for all
+  active parameters after the enumeration walk completes, so the host
+  re-queries rows whose display it cached while enumeration was mid-flight.
 - **macOS red/blue channel swap** (`7fef691`): removed the `.bgra` swizzle from
   both plugins' output shaders. The IOSurface→GL binding
   (`CGLTexImageIOSurface2D` with `GL_BGRA` + `GL_UNSIGNED_INT_8_8_8_8_REV`)
@@ -55,9 +69,6 @@ upstream PR description. Full investigation notes live in
   and FFGL SDK notes, sprint plan, per-session test results, session handoff.
 
 ### Known issues (tracked, not yet fixed)
-- Float/int sliders clamp to the FFGL prototype range (floats 0–1); TD
-  defaults above 1.0 display correctly until first interaction, then clamp.
-  Fix planned: remap host wire 0–1 ↔ TD min/max plus `GetParameterDisplay`.
 - Pulsing **Reload** on a playing FX clip can segfault the host: TE link
   invalidation races the render thread's per-frame texture push. Fix planned:
   mutex around parameter/link state (prerequisite for dynamic values, #28).

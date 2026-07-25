@@ -79,27 +79,32 @@ GetParameterDisplay, TE lifecycle mutex, Reload crash root-cause fix
 (Out CHOP/DAT), echo settling window, newest-engine preference, queued
 superseding loads. CHANGELOG.md is the authoritative delta list.
 
+DONE (2026-07-24, branch-split session): the three stacked branches exist
+locally and each builds Release/arm64 — `fix/stability` (framework update,
+flicker, enumeration, InstanceReady, mutex, R/B swap, empty-path guard, reload
+queue), `feat/slot-naming-ranges` (unique names, per-family IDs, range remap —
+BREAKING), `feat/dynamic-params` (dirty push, echo channel, settling window,
+engine preference). Acceptance held: `git diff feat/dynamic-params modernize-te
+-- src/` is empty; the only remaining delta is docs, which stay on
+`modernize-te`. The Menu2 collision fix had to move up into
+`feat/slot-naming-ranges` (its fix IS the per-family counters) — noted in
+FORK-GUIDE.md and to be called out in PR #1's description. `FORK-GUIDE.md` at
+the repo root is the decoder (branch map, change→branch table, migration notes,
+echo-authoring convention, verification matrix). **Nothing is pushed and no PRs
+are open — the Windows pass gates that.**
+
 Remaining queue:
-1. **Branch split for upstream PRs**: reconstruct the work as thematic
-   branches off master so the upstream maintainer can cherry-pick —
-   `fix/stability` (framework update, flicker, enumeration, InstanceReady,
-   mutex, R/B swap, empty-path guard, reload queue), `feat/slot-naming-ranges`
-   (unique names, per-family IDs, range remap — BREAKING for saved comps),
-   `feat/dynamic-params` (dirty push, echo channel, settling window, engine
-   preference). Needs patch surgery (commits interleave concerns) + a build
-   per branch.
-2. **Windows pass** (Vincent): R/B swap presence, all fixes compile/behave;
+1. **Windows pass** (Vincent): R/B swap presence, all fixes compile/behave;
    the macOS-only engine-preference scan needs a Windows equivalent
    (Program Files/Derivative scan).
-3. Color-picker UI spike (RGBA renders as 4 faders; Arena may never group
+2. Color-picker UI spike (RGBA renders as 4 faders; Arena may never group
    FFGL R/G/B/A into its native picker).
-4. Int range remap (ints unscaled within +/-10000 prototype).
-5. #17 hardcoded 60 fps; #12 32-bit corruption (macOS speckle).
-6. Tox-side: lag/filter the parexec writes for smooth interpolated recalls
+3. Int range remap (ints unscaled within +/-10000 prototype).
+4. #17 hardcoded 60 fps; #12 32-bit corruption (macOS speckle).
+5. Tox-side: lag/filter the parexec writes for smooth interpolated recalls
    (Vincent's next probe); echo skill — extend .claude/skills/ffgl-tox-effect
    into a "prepare a component as an Engine effect" checklist (Par DAT->Out
    DAT echo, naming rules, engine pinning vs newest-preference).
-7. Known limitations (accepted/documented): OSC/REST reaches only the first
-   event slot (uniform "Pulse" captions trade-off); unranged floats cannot
+6. Known limitations (accepted/documented): unranged floats cannot
    exceed their load-time value from the host; TD-side changes within the
    30-frame settling window of a host push to the SAME par are dropped.

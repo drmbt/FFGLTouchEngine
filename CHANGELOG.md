@@ -3,8 +3,10 @@
 All changes on this fork relative to upstream
 [medcelerate/FFGLTouchEngine](https://github.com/medcelerate/FFGLTouchEngine)
 v2.0.4, newest first. Maintained per-commit so it can seed an eventual
-upstream PR description. Full investigation notes live in
-[docs/knowledge/](docs/knowledge/README.md).
+upstream PR description. [FORK-GUIDE.md](FORK-GUIDE.md) maps each change below
+to the branch that carries it (`fix/stability`, `feat/slot-naming-ranges`,
+`feat/dynamic-params`) and holds the migration and tox-authoring notes. Full
+investigation notes live in [docs/knowledge/](docs/knowledge/README.md).
 
 ## Unreleased / branch `modernize-te`
 

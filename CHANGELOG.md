@@ -129,11 +129,13 @@ upstream PR description. Full investigation notes live in
 - **Unique FFGL slot names — breaking for saved compositions** (`7fef691`):
   pre-allocated slots renamed from `Parameter<N>`/`Color`/`Pulse` to
   `Float1–40`, `Int1–40`, `Toggle1–40`, `Text1–40`, `Menu1–40`,
-  `Color1R/G/B/A`–`Color10R/G/B/A`, giving every parameter a distinct
-  OSC/REST address. Event slots intentionally all remain `Pulse` (the static
-  name is the host's button caption and FFGL cannot rename it dynamically);
-  their rows still show TD labels via display names. Compositions saved
-  against the old slot names will not restore parameter values.
+  `Pulse1–40`, `Color1R/G/B/A`–`Color10R/G/B/A`, giving every parameter a
+  distinct OSC/REST address (identically-named slots collapse to a single
+  API entry, which had left all but the first event slot unreachable via
+  OSC/REST). Event-button captions read the static name ("Pulse2") since
+  FFGL cannot rename it dynamically; rows still show TD labels via display
+  names. Compositions saved against the old slot names will not restore
+  parameter values.
 - **TouchEngine.framework updated** (`7bacc42`) to Derivative
   TouchEngine-macOS @ `c3ceb1a` (2025-06-13), replacing the 2023-era
   framework bundled with v2.0.4.

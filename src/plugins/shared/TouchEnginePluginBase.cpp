@@ -576,13 +576,14 @@ void FFGLTouchEnginePluginBase::ConstructBaseParameters() {
 	}
 
 
-	// Event slots deliberately all share the name "Pulse": the host renders the
-	// static name as the button caption and FFGL has no event to rename it, so
-	// "Pulse1"/"Pulse2" captions read as noise next to the TD row labels. The
-	// cost is that name-keyed host surfaces (OSC/REST) can only address the
-	// first event slot.
+	// Event slots get unique names like every other family: the host keys
+	// OSC/REST addresses on the static name, and identical names collapse to a
+	// single entry — only the FIRST event slot was reachable via OSC/API. The
+	// cost is button captions reading "Pulse1"/"Pulse2" (the caption follows
+	// the static name and FFGL has no rename event); the row label still shows
+	// the TD name via the display-name mechanism.
 	for (uint32_t i = (MaxParamsByType * 4) + OffsetParamsByType; i < (MaxParamsByType * 5) + OffsetParamsByType; i++) {
-		SetParamInfof(i, (std::string("Pulse")).c_str(), FF_TYPE_EVENT);
+		SetParamInfof(i, (std::string("Pulse") + std::to_string(i - (MaxParamsByType * 4) - OffsetParamsByType + 1)).c_str(), FF_TYPE_EVENT);
 		SetParamVisibility(i, false, false);
 	}
 

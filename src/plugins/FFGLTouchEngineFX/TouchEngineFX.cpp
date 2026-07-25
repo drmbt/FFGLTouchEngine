@@ -232,12 +232,12 @@ FFResult FFGLTouchEngineFX::ProcessOpenGL(ProcessOpenGLStruct* pGL)
 				result = TED3D11ContextGetTexture(D3DContext, static_cast<TED3DSharedTexture*>(TETextureToSend.get()), D3DTextureToSend.take());
 				if (result != TEResultSuccess)
 				{
-					return FF_FALSE;
+					return FF_FAIL;
 				}
 				ID3D11Texture2D* RawTextureToSend = TED3D11TextureGetTexture(D3DTextureToSend);
 
 				if (RawTextureToSend == nullptr) {
-					return FF_FALSE;
+					return FF_FAIL;
 				}
 
 				D3D11_TEXTURE2D_DESC RawTextureDesc;
@@ -274,9 +274,12 @@ FFResult FFGLTouchEngineFX::ProcessOpenGL(ProcessOpenGLStruct* pGL)
 					OutputInteropInitialized = true;
 				}
 
-				IDXGIKeyedMutex* keyedMutex;
-				RawTextureToSend->QueryInterface<IDXGIKeyedMutex>(&keyedMutex);
-				if (keyedMutex == nullptr) {
+				// ComPtr, so the reference QueryInterface takes is dropped on every
+				// path out of here. As a raw pointer it was declared uninitialized
+				// (so the null check read garbage when QueryInterface failed) and
+				// leaked on each of the early returns below.
+				Microsoft::WRL::ComPtr<IDXGIKeyedMutex> keyedMutex;
+				if (FAILED(RawTextureToSend->QueryInterface(IID_PPV_ARGS(keyedMutex.GetAddressOf()))) || keyedMutex == nullptr) {
 					return FF_FAIL;
 				}
 
@@ -293,7 +296,7 @@ FFResult FFGLTouchEngineFX::ProcessOpenGL(ProcessOpenGLStruct* pGL)
 				result = TEInstanceGetTextureTransfer(instance, TETextureToSend, &semaphore, &waitValue);
 				if (result != TEResultSuccess)
 				{
-					return FF_FALSE;
+					return FF_FAIL;
 				}
 				keyedMutex->AcquireSync(waitValue, INFINITE);
 
@@ -309,8 +312,9 @@ FFResult FFGLTouchEngineFX::ProcessOpenGL(ProcessOpenGLStruct* pGL)
 					return FF_FAIL;
 				}
 				devContext->Flush();
-				devContext->Release();
-				keyedMutex->Release();
+				// No explicit Release() on either of these: both are ComPtrs and
+				// release themselves at scope exit. The explicit calls underflowed
+				// the immediate context's refcount once per frame.
 			}
 
 		}

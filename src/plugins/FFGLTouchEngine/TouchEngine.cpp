@@ -165,12 +165,12 @@ FFResult FFGLTouchEngine::ProcessOpenGL(ProcessOpenGLStruct* pGL)
 				result = TED3D11ContextGetTexture(D3DContext, static_cast<TED3DSharedTexture*>(TETextureToSend.get()), D3DTextureToSend.take());
 				if (result != TEResultSuccess)
 				{
-					return FF_FALSE;
+					return FF_FAIL;
 				}
 				ID3D11Texture2D* RawTextureToSend = TED3D11TextureGetTexture(D3DTextureToSend);
 
 				if (RawTextureToSend == nullptr) {
-					return FF_FALSE;
+					return FF_FAIL;
 				}
 
 				D3D11_TEXTURE2D_DESC RawTextureDesc;
@@ -196,14 +196,20 @@ FFResult FFGLTouchEngine::ProcessOpenGL(ProcessOpenGLStruct* pGL)
 					}
 
 					InitializeGlTexture(SpoutTextureOutput, OutputWidth, OutputHeight, GetGlType(RawTextureDesc.Format));
+					DXFormat = RawTextureDesc.Format;
 
 					OutputInteropInitialized = true;
 				}
 
+				// Compare against DXFormat, which is actually assigned below. The
+				// old test compared GetGlType(...) — a GL type enum — against
+				// GLFormat, which this plugin never assigns: it stayed 0 while
+				// GetGlType() never returns 0, so the branch fired on EVERY frame
+				// and tore down and rebuilt the whole interop each time.
 				if (
 					RawTextureDesc.Width != OutputWidth
 					|| RawTextureDesc.Height != OutputHeight
-					|| GetGlType(RawTextureDesc.Format) != GLFormat
+					|| RawTextureDesc.Format != DXFormat
 					) {
 					OutputWidth = RawTextureDesc.Width;
 					OutputHeight = RawTextureDesc.Height;
@@ -219,12 +225,15 @@ FFResult FFGLTouchEngine::ProcessOpenGL(ProcessOpenGLStruct* pGL)
 					OutputInterop.spoutdx.CreateDX11Texture(D3DDevice.Get(), OutputWidth, OutputHeight, RawTextureDesc.Format, &D3DTextureOutput);
 
 					InitializeGlTexture(SpoutTextureOutput, OutputWidth, OutputHeight, GetGlType(RawTextureDesc.Format));
+					DXFormat = RawTextureDesc.Format;
 				}
 
-				IDXGIKeyedMutex* keyedMutex;
-				RawTextureToSend->QueryInterface<IDXGIKeyedMutex>(&keyedMutex);
-
-				if (keyedMutex == nullptr) {
+				// ComPtr, so the reference QueryInterface takes is dropped on every
+				// path out of here. As a raw pointer it was declared uninitialized
+				// (so the null check read garbage when QueryInterface failed) and
+				// leaked on each of the early returns below.
+				Microsoft::WRL::ComPtr<IDXGIKeyedMutex> keyedMutex;
+				if (FAILED(RawTextureToSend->QueryInterface(IID_PPV_ARGS(keyedMutex.GetAddressOf()))) || keyedMutex == nullptr) {
 					return FF_FAIL;
 				}
 
@@ -233,7 +242,7 @@ FFResult FFGLTouchEngine::ProcessOpenGL(ProcessOpenGLStruct* pGL)
 				result = TEInstanceGetTextureTransfer(instance, TETextureToSend, &semaphore, &waitValue);
 				if (result != TEResultSuccess)
 				{
-					return FF_FALSE;
+					return FF_FAIL;
 				}
 				keyedMutex->AcquireSync(waitValue, INFINITE);
 				Microsoft::WRL::ComPtr<ID3D11DeviceContext> devContext;
@@ -247,8 +256,9 @@ FFResult FFGLTouchEngine::ProcessOpenGL(ProcessOpenGLStruct* pGL)
 					return FF_FAIL;
 				}
 				devContext->Flush();
-				devContext->Release();
-				keyedMutex->Release();
+				// No explicit Release() on either of these: both are ComPtrs and
+				// release themselves at scope exit. The explicit calls underflowed
+				// the immediate context's refcount once per frame.
 
 			}
 

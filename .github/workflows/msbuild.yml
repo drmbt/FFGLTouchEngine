@@ -9,6 +9,9 @@ on:
   push:
     tags:
       - '*'
+  # Manual builds for testing, without minting a tag or publishing a release.
+  # The artifacts land on the run page and via `gh run download`.
+  workflow_dispatch:
 
 env:
   BUILD_CONFIGURATION: Release
@@ -79,6 +82,10 @@ jobs:
   release:
     needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
+    # Only tag pushes publish. A workflow_dispatch run still produces both
+    # artifacts to download, but must never create a release named after a
+    # branch (github.ref_name is the branch, not a version, when dispatched).
+    if: startsWith(github.ref, 'refs/tags/')
 
     steps:
     - name: Download Windows Artifact
@@ -96,4 +103,7 @@ jobs:
       with:
         artifacts: "FFGLTouchEngine-Windows-${{ github.ref_name }}.zip,FFGLTouchEngine-macOS-${{ github.ref_name }}.zip"
         generateReleaseNotes: true
-        prerelease: false
+        # Fork builds stay prereleases until the artifact itself has been
+        # verified on both platforms — not just the source it was built from.
+        # Flip to false deliberately, per release.
+        prerelease: true

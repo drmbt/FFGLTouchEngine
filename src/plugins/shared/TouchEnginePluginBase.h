@@ -70,6 +70,7 @@ public:
 
 	float GetFloatParameter(unsigned int index) override;
 	char* GetTextParameter(unsigned int index) override;
+	char* GetParameterDisplay(unsigned int index) override;
 
 protected:
 	FFResult InitializeDevice();
@@ -168,10 +169,33 @@ protected:
 	std::unordered_map<FFUInt32, std::string> ParameterMapString;
 	std::unordered_map<FFUInt32, bool> ParameterMapBool;
 	std::set<FFUInt32> PulseParameters;
+
+	// Per-family slot counters. Each family owns a contiguous pre-allocated
+	// region of MaxParamsByType slots; IDs are familyBase + counter. These must
+	// never be derived from ParameterMap*.size() — those maps mix families (and
+	// gain entries on host interaction), which is how two menus ended up sharing
+	// one ParamID.
+	uint32_t FloatParamCount = 0;
+	uint32_t IntParamCount = 0;
+	uint32_t BoolParamCount = 0;
+	uint32_t StringParamCount = 0;
+	uint32_t EventParamCount = 0;
+	uint32_t MenuParamCount = 0;
 	uint32_t ColorParamCount = 0;
 
 	std::set<FFUInt32> ActiveVectorParams;
 	std::vector<VectorParameterInfo> VectorParameters;
+
+	// TD-side [min,max] per FF_TYPE_STANDARD slot. The FFGL wire and the host
+	// slider stay at the 0-1 prototype range (there is no FFGL range-change
+	// event, so the host can never learn a different one); ParameterMapFloat
+	// holds real TD values and these ranges convert at the Get/Set boundary.
+	// The range is widened to include the initial value so out-of-range
+	// defaults (e.g. an unranged TD float at 145) survive the round trip.
+	std::unordered_map<FFUInt32, std::pair<double, double>> ParameterRanges;
+	double NormalizeToHost(FFUInt32 paramID, double realValue);
+	double DenormalizeFromHost(FFUInt32 paramID, double hostValue);
+	char DisplayBuffer[16] = { 0 };
 
 	//Operator link identifiers (input is only set by FX-style toxes)
 	std::string InputOpName;

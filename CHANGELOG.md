@@ -22,16 +22,24 @@ upstream PR description. Full investigation notes live in
   mark parameters dirty, so they are not pushed back. A pending host set
   always beats the echo (dirty-wins guard). Verified end-to-end with a
   preset-recall tox: TD-side writes now appear in the Resolume UI/REST.
-  KNOWN ISSUE: if the echo includes a par the host just changed (e.g. the
-  menu that triggers the preset), a stale cook can revert the host set —
-  tox-side workaround is a Select excluding that par; an in-code
-  grace-window fix is planned.
-- **Engine-version constraint discovered**: an unpinned tox folder resolved
-  to an engine build that exposes ONLY texture output links — no
-  FloatBuffer/CHOP or StringData/DAT outputs, silently. The `TouchEngine`
-  symlink next to the tox (pinning a current TD build) is REQUIRED for the
-  echo channel. Symptom: `GetLinkGroups(output)` returns a single group with
-  one texture child.
+  A per-param settling window (30 frames after a host push) drops stale
+  echoes of the just-pushed par, so a menu that is part of its own echo set
+  no longer gets reverted by a pre-push cook — no tox-side Select needed.
+  Verified end-to-end on an unpinned tox: preset recall reflects colors and
+  floats into the Resolume UI/REST, menu selections stick.
+- **Newest-engine preference (macOS)**: left to its own devices TE resolved
+  unpinned tox folders to an old TouchDesigner install whose engine exposes
+  ONLY texture output links (no CHOP/DAT outputs — silently breaking the
+  echo channel; symptom: `GetLinkGroups(output)` returns a single texture
+  child). The plugin now scans `/Applications` for the newest
+  `TouchDesigner.<build>.app` and calls `TEInstanceSetPreferredEnginePath`,
+  so toxes load a modern engine from ANY folder. A `TouchEngine` file-system
+  link next to the tox still overrides this (deliberate pinning), and the
+  configured engine path is logged at every load.
+- **Superseding loads are queued, not dropped**: changing the Tox File (or
+  pulsing Reload) while a load was in flight used to be silently ignored,
+  leaving the old tox running behind an updated path display. The request is
+  now queued and replayed as soon as the in-flight load completes.
 - **Dynamic parameter updates (#28) — TD-side changes now persist**:
   `PushParametersToTouchEngine` pushes only host-modified (dirty) parameters
   instead of every parameter every frame — the blanket push was stomping

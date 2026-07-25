@@ -144,6 +144,10 @@ protected:
 	// we've already enumerated them and gone ready — the render thread then
 	// pushes a dead link identifier and the host segfaults inside TE.
 	std::atomic_bool isLoadPending{ false };
+	// A load/reload request arrived while a load was in flight. Rather than
+	// dropping it (which silently left the OLD tox running after a path
+	// change), it is replayed as soon as the in-flight load completes.
+	std::atomic_bool isReloadQueued{ false };
 	std::atomic_bool isGraphicsContextLoaded;
 	std::atomic_bool isTouchFrameBusy;
 	std::atomic_bool isBeingDestroyed;
@@ -212,6 +216,12 @@ protected:
 	// to option indices.
 	std::unordered_map<std::string, FFUInt32> EchoNameToParamID;
 	std::unordered_map<FFUInt32, std::vector<std::string>> MenuTokens;
+	// Frame stamp of each slot's last host-push. Echo values for a slot are
+	// ignored inside a short settling window after its push: out-link events
+	// cooked BEFORE the push land after it and would revert the host's set
+	// (observed live with a menu that was part of its own echo set).
+	std::unordered_map<FFUInt32, uint64_t> LastPushFrame;
+	static constexpr uint64_t EchoSettleFrames = 30;
 	std::string EchoChopIdentifier;
 	std::string EchoDatIdentifier;
 	void ApplyEchoValue(FFUInt32 ParamID, double numeric, const char* text);

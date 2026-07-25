@@ -274,7 +274,9 @@ bool FFGLTouchEnginePluginBase::LoadTEFile()
 	}
 
 	if (isLoadPending) {
-		FFGLLog::LogToHost("FFGLTouchEngine: load already in progress — ignoring reload request");
+		// Queue instead of dropping: replayed from the in-flight load's DidLoad.
+		FFGLLog::LogToHost("FFGLTouchEngine: load already in progress — queueing reload");
+		isReloadQueued = true;
 		return false;
 	}
 
@@ -316,6 +318,36 @@ bool FFGLTouchEnginePluginBase::LoadTEFile()
 	return true;
 }
 
+#ifdef __APPLE__
+// Newest installed TouchDesigner app by build number ("TouchDesigner.33070.app").
+// Left to its own devices TE can select an old install whose engine exposes
+// only texture output links (no CHOP/DAT outputs — silently breaking the par
+// echo channel), so we steer it to the newest build. A TouchEngine
+// file-system link next to the tox still overrides this (deliberate pinning).
+static std::string FindNewestTouchDesignerApp() {
+	NSFileManager* fm = [NSFileManager defaultManager];
+	NSArray<NSString*>* entries = [fm contentsOfDirectoryAtPath:@"/Applications" error:nil];
+	long bestBuild = -1;
+	NSString* bestPath = nil;
+	for (NSString* entry in entries) {
+		if (![entry hasPrefix:@"TouchDesigner"] || ![entry hasSuffix:@".app"]) {
+			continue;
+		}
+		NSArray<NSString*>* parts = [entry componentsSeparatedByString:@"."];
+		long build = 0;
+		for (NSString* part in parts) {
+			long v = [part integerValue];
+			if (v > build) build = v;
+		}
+		if (build > bestBuild) {
+			bestBuild = build;
+			bestPath = [@"/Applications/" stringByAppendingString:entry];
+		}
+	}
+	return bestPath != nil ? std::string([bestPath UTF8String]) : std::string();
+}
+#endif
+
 void FFGLTouchEnginePluginBase::LoadTouchEngine() {
 
 	if (instance == nullptr) {
@@ -327,6 +359,17 @@ void FFGLTouchEnginePluginBase::LoadTouchEngine() {
 			instance.reset();
 			return;
 		}
+
+#ifdef __APPLE__
+		std::string newestTD = FindNewestTouchDesignerApp();
+		if (!newestTD.empty()) {
+			result = TEInstanceSetPreferredEnginePath(instance, newestTD.c_str());
+			if (result == TEResultSuccess) {
+				FFGLLog::LogToHost((std::string("FFGLTouchEngine: preferred engine: ") + newestTD +
+					" (a TouchEngine link next to the tox overrides this)").c_str());
+			}
+		}
+#endif
 
 	}
 
@@ -581,6 +624,7 @@ void FFGLTouchEnginePluginBase::ResetBaseParameters() {
 	DirtyParams.clear();
 	EchoNameToParamID.clear();
 	MenuTokens.clear();
+	LastPushFrame.clear();
 	EchoChopIdentifier.clear();
 	EchoDatIdentifier.clear();
 	PulseParameters.clear();
@@ -1115,6 +1159,7 @@ FFResult FFGLTouchEnginePluginBase::PushParametersToTouchEngine()
 			continue;
 		}
 		DirtyParams.erase(dirty);
+		LastPushFrame[param.second] = FrameCount;
 
 		FFUInt32 type = ParameterMapType[param.second];
 
@@ -1168,6 +1213,9 @@ FFResult FFGLTouchEnginePluginBase::PushParametersToTouchEngine()
 		}
 		if (!dirty) {
 			continue;
+		}
+		for (uint8_t i = 0; i < param.count; i++) {
+			LastPushFrame[param.children[i]] = FrameCount;
 		}
 
 		double values[4] = { 0,0,0,0 };
@@ -1237,6 +1285,14 @@ void FFGLTouchEnginePluginBase::eventCallback(TEEvent event, TEResult result, in
 	switch (event) {
 	case TEEventInstanceDidLoad:
 		isLoadPending = false;
+		if (isReloadQueued) {
+			// A newer load request (tox path change or reload pulse) arrived
+			// while this load was in flight — supersede it immediately instead
+			// of resuming a stale comp.
+			isReloadQueued = false;
+			LoadTEFile();
+			break;
+		}
 		if (result != TEResultSuccess) {
 			// Surface load failures (bad tox, or a tox authored in a newer TD build
 			// than this engine) instead of silently showing nothing. Do NOT resume
@@ -1248,6 +1304,16 @@ void FFGLTouchEnginePluginBase::eventCallback(TEEvent event, TEResult result, in
 				". Check the tox path and that the TouchEngine build is new enough for this tox.";
 			FFGLLog::LogToHost(msg.c_str());
 			break;
+		}
+		{
+			// Surface which engine actually loaded — the engine build silently
+			// decides which output link types exist (old engines expose only
+			// texture outputs, breaking the par echo channel).
+			TouchObject<TEString> enginePath;
+			if (TEInstanceGetConfiguredEnginePath(instance, enginePath.take()) == TEResultSuccess
+				&& enginePath && enginePath->string[0] != '\0') {
+				FFGLLog::LogToHost((std::string("FFGLTouchEngine: engine: ") + enginePath->string).c_str());
+			}
 		}
 		if (LoadTEGraphicsContext(false)) {
 			isTouchEngineLoaded = true;
@@ -1282,6 +1348,13 @@ void FFGLTouchEnginePluginBase::ApplyEchoValue(FFUInt32 ParamID, double numeric,
 	// reverted before they reached TE).
 	if (DirtyParams.find(ParamID) != DirtyParams.end()) {
 		return;
+	}
+	auto pushed = LastPushFrame.find(ParamID);
+	if (pushed != LastPushFrame.end()) {
+		if (FrameCount - pushed->second < EchoSettleFrames) {
+			return; // pushed value still in flight; drop stale echoes
+		}
+		LastPushFrame.erase(pushed);
 	}
 	switch (ParameterMapType[ParamID]) {
 	case FF_TYPE_STANDARD:

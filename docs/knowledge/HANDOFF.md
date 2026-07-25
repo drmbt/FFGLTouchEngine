@@ -70,69 +70,36 @@ fresh session needs.
 6. Working: generator + FX pipelines on both engines, toggle, string, single
    menu, pulse-via-API (no latch), Unload/Reload/Clear, display names.
 
-## Priority work queue (agreed direction)
+## Priority work queue (updated 2026-07-24 night)
 
-1. ✅ **DONE & LIVE-VERIFIED (2026-07-24).**
-   Busy-frame persistence on macOS (flicker fix): redraw cached last frame on
-   busy/not-ready, return FF_SUCCESS. Also fixed the missing ScopedShaderBinding
-   on the input base-pass draw. See test-results-2026-07-24.md.
-2. ✅ **DONE & LIVE-VERIFIED (2026-07-24).**
-   Enumeration robustness: skip+log+continue instead of aborting the walk;
-   read-values-before-register (no half-registered params); `default:` case for
-   unknown TELinkTypes; TE load errors surfaced via FFGLLog + TEResultGetDescription.
-   FOUND & DEFERRED: Menu2 collision (see 07-24 doc) — belongs with item 3/4.
-2.5. **PROMOTED: mutex around Parameters/ParameterMap* + TE lifecycle** (was
-   item-5 prereq). Live-verified 2026-07-24: Reload on a playing FX clip
-   segfaults Arena (render-thread texture push into a freed TE link), and
-   failed loads leave params spamming "Failed to set double value" per frame.
-3. **Unique slot names** ("Pulse1..40", "Color1R/G/B/A"...) → distinct OSC
-   addresses. (Breaking change for saved comps — do it on the fork, note in README.)
-4. **Float ranges**: wire stays 0–1; remap to TD min/max in SetFloatParameter/
-   PushParameters (and inverse in GetFloatParameter); implement
-   GetParameterDisplay to show real values. Int range widening similarly.
-5. **#28 dynamic values**: handle TELinkEventValueChange in linkCallback →
-   update stored value → RaiseParamEvent(FF_EVENT_FLAG_VALUE) (Resolume 7.4.0+),
-   with echo-loop guard. Prereq: add a mutex around Parameters/ParameterMap*
-   (TE callbacks race the render thread — likely also fixes reload spam).
-6. A/B the modern-framework build (swap build-modern bundles into Extra Effects,
-   restart Arena, rerun the col 1–7 matrix; watch the testNewPars enumeration).
-7. Still unverified (needs probe tox ground truth from Vincent: par list of
-   testNewPars.tox, or scroll Arena's clip panel and screenshot): header,
-   momentary vs pulse semantics, XY defaults (#27), two-menu collision.
+DONE & LIVE-VERIFIED: items 1-5 plus the full #28 arc — flicker fix,
+enumeration robustness, unique slot names (Menu2 fixed), float range remap +
+GetParameterDisplay, TE lifecycle mutex, Reload crash root-cause fix
+(InstanceReady semantics), dirty-only push, par-state echo channel
+(Out CHOP/DAT), echo settling window, newest-engine preference, queued
+superseding loads. CHANGELOG.md is the authoritative delta list.
 
-## Kickoff prompt for a fresh session
-
-```
-Continue the FFGLTouchEngine fork work on branch modernize-te. First read
-docs/knowledge/HANDOFF.md and docs/knowledge/test-results-2026-07-24.md.
-
-State: items 1–2 (macOS flicker fix + enumeration robustness) are implemented,
-built, and installed; the modern bundle is live in Resolume Arena (already
-restarted, new binary confirmed loading). The Resolume MCP is now installed and
-should be loaded in THIS session — confirm its tools are available (else the REST
-API is at http://localhost:8080/api/v1). The prior live rig was unsaved and is
-gone; the Compositions/test_MCP_TouchEngine.avc reopens empty.
-
-Do this:
-1. Using the Resolume MCP, build a minimal verification rig in the current comp:
-   - a TouchEngine SOURCE clip loading tests/engine-2025.33070/testNewPars.tox
-     (the TouchEngine symlink in that folder pins the 2025.33070 engine),
-   - a second clip with a heavy/slow tox for the flicker check (or reuse an
-     Example tox and drive it hard).
-2. Verify item 2 (enumeration): testNewPars ground truth = 11 params, NO
-   int/bool/string types; correct enumeration should expose ~18 FFGL slots
-   (10 standard + 4 color + 2 event + 2 option). KNOWN-REMAINING bug: the second
-   menu (Menu2) collides and drops — do NOT treat that as a regression. Tail
-   ~/Library/Logs/Resolume Arena/Resolume Arena log.txt for new
-   "FFGL: skipping parameter …" lines, and confirm reload no longer spams
-   "FFGL: Failed to set double value".
-3. Verify item 1 (flicker): on the heavy tox, confirm no transparent-frame
-   flicker while TE is mid-cook (should hold the last frame). This is visual —
-   ask me to watch.
-4. A/B vs the baseline build in ~/Documents/Resolume Arena/_plugin-backups/
-   _backup-baseline-build-2026-07-24/ (swap into Extra Effects + restart Arena;
-   backups are OUTSIDE the scanned tree on purpose — keep them there).
-5. If verified, the changes are still uncommitted on modernize-te — offer to
-   commit. Next queue items: 3 (unique slot/OSC names — also fixes Menu2),
-   4 (float/int UI ranges), 5 (#28 dynamic values + mutex).
-```
+Remaining queue:
+1. **Branch split for upstream PRs**: reconstruct the work as thematic
+   branches off master so the upstream maintainer can cherry-pick —
+   `fix/stability` (framework update, flicker, enumeration, InstanceReady,
+   mutex, R/B swap, empty-path guard, reload queue), `feat/slot-naming-ranges`
+   (unique names, per-family IDs, range remap — BREAKING for saved comps),
+   `feat/dynamic-params` (dirty push, echo channel, settling window, engine
+   preference). Needs patch surgery (commits interleave concerns) + a build
+   per branch.
+2. **Windows pass** (Vincent): R/B swap presence, all fixes compile/behave;
+   the macOS-only engine-preference scan needs a Windows equivalent
+   (Program Files/Derivative scan).
+3. Color-picker UI spike (RGBA renders as 4 faders; Arena may never group
+   FFGL R/G/B/A into its native picker).
+4. Int range remap (ints unscaled within +/-10000 prototype).
+5. #17 hardcoded 60 fps; #12 32-bit corruption (macOS speckle).
+6. Tox-side: lag/filter the parexec writes for smooth interpolated recalls
+   (Vincent's next probe); echo skill — extend .claude/skills/ffgl-tox-effect
+   into a "prepare a component as an Engine effect" checklist (Par DAT->Out
+   DAT echo, naming rules, engine pinning vs newest-preference).
+7. Known limitations (accepted/documented): OSC/REST reaches only the first
+   event slot (uniform "Pulse" captions trade-off); unranged floats cannot
+   exceed their load-time value from the host; TD-side changes within the
+   30-frame settling window of a host push to the SAME par are dropped.

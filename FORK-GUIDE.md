@@ -198,24 +198,42 @@ channel. **No equivalent scan exists on Windows yet** (see below).
 
 ## Verification status
 
-| Area | macOS (arm64, Arena 7.x) | Windows |
+| Area | macOS (arm64, Arena 7.x) | Windows (x64, Arena 7.27.1) |
 |---|---|---|
-| Reload gauntlet (3× Reload on a playing FX clip) | **verified live** — host alive, full re-enumeration each time, zero error spam | **untested** |
+| Reload gauntlet (3× Reload on a playing FX clip) | **verified live** — host alive, full re-enumeration each time, zero error spam | **verified live** — host PID unchanged, full re-enumeration each time, zero error spam |
 | macOS FX flicker fix | **verified live** — no flicker under continuous cooking | n/a (macOS-only path) |
-| Red/blue swap fix | **verified live** | n/a (macOS-only shader) |
-| Enumeration robustness | **verified live** — probe tox exposes the expected slots, bad links skip individually | **untested** |
-| Unique slot names / OSC reachability | **verified live** via Resolume REST | **untested** |
-| Menu collision fix | **verified live** — both menus appear and drive independently | **untested** |
-| Float range remap | **verified live** — out-of-range defaults survive, real values in the readout | **untested** |
-| Dirty-only push (#28 first half) | **verified live** — Parameter-Execute preset recall sticks | **untested** |
-| Par-state echo channel (CHOP + DAT) | **verified live** — preset recall reflects colours, floats and menu selections into the Resolume UI/REST | **untested** |
-| Newest-engine preference | **verified live** on an unpinned tox | **not implemented** — the `/Applications` scan is macOS-only; Windows relies on TE's own engine resolution |
-| Build | **clean** (`cmake --build build-modern --config Release`, arm64) on all three branches | **not built** |
+| Red/blue swap fix | **verified live** | n/a (macOS-only shader) — Windows shader confirmed byte-identical to upstream |
+| Enumeration robustness | **verified live** — probe tox exposes the expected slots, bad links skip individually | **verified live** — probe2 exposes the expected slots, zero `skipping parameter` |
+| Unique slot names / OSC reachability | **verified live** via Resolume REST | **verified live** — `Float1-10`, `Color1R/G/B/A`, `Pulse1-4` |
+| Menu collision fix | **verified live** — both menus appear and drive independently | **verified live** — `Menu1` and `Menu2` independent |
+| Float range remap | **verified live** — out-of-range defaults survive, real values in the readout | **verified live** — 0–1 wire, TD holds 145.0 / 1920 / 1080 |
+| Dirty-only push (#28 first half) | **verified live** — Parameter-Execute preset recall sticks | **verified live** — preset recall sticks past the settling window |
+| Par-state echo channel (CHOP + DAT) | **verified live** — preset recall reflects colours, floats and menu selections into the Resolume UI/REST | **verified live** — echo CHOP + DAT registered (incl. late path), recall reflects back |
+| Newest-engine preference | **verified live** on an unpinned tox | **implemented + verified live** — registry + `%ProgramFiles%\Derivative` scan, ordered by `TouchDesigner.exe` version resource |
+| Build | **clean** (`cmake --build build-modern --config Release`, arm64) on all three branches | **clean** (`cmake -B build-win -G "Visual Studio 17 2022" -A x64`) on `modernize-te` |
 
-**Nothing here has been run on Windows.** Both plugins still compile the D3D11 /
-Spout paths, and none of the changed code is macOS-only except the flicker fix,
-the shader swizzle and the engine-path scan — but "should be fine" is not
-verification. A Windows pass gates opening the upstream PRs.
+**Windows pass completed 2026-07-25** — see
+[docs/knowledge/test-results-2026-07-25.md](docs/knowledge/test-results-2026-07-25.md)
+for the full record. Three Windows-only defects were found and fixed (the
+`NOMINMAX` compile break in the range code, the macOS-only engine preference,
+and unlogged engine-path failures). The individual feature branches were **not**
+rebuilt on Windows — only `modernize-te` — so the two branch-attributed fixes
+still need cherry-picking before the upstream PRs open.
+
+### Two Windows environment traps
+
+1. **Ship `lib/TouchEngine/TouchEngine.dll` (the redistributable), never the one
+   from `TouchDesigner\bin\`.** The latter is an internal component of the TD
+   install, not the client library: every `TEInstanceConfigure` fails with
+   `TEResultBadUsage`, even when loaded from its own directory. The
+   redistributable's version is independent of the engine's — the 2023.11780
+   client library hosts the 2025.33070 engine.
+2. **The macOS `TouchEngine` symlink pins break tox loads on Windows.** They
+   check out as 37-byte text files holding an `/Applications/...` path; TE
+   honours the pin, cannot use it, and fails with "A path to TouchEngine was
+   specified but it could not be used". Use a directory without one (see
+   `touchengine_tests/win-unpinned/`); a real Windows pin needs a junction or
+   `.lnk`.
 
 ### Windows verification checklist
 

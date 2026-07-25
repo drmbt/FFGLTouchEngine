@@ -8,9 +8,29 @@ to the branch that carries it (`fix/stability`, `feat/slot-naming-ranges`,
 `feat/dynamic-params`) and holds the migration and tox-authoring notes. Full
 investigation notes live in [docs/knowledge/](docs/knowledge/README.md).
 
-## Unreleased / branch `modernize-te`
+## v3.0.0 — 2026-07-25 (branch `modernize-te`)
+
+First fork release. Major version because the slot rename below is **breaking
+for saved compositions and OSC/MIDI maps** — see
+[Migration notes](FORK-GUIDE.md#migration-notes--featslot-naming-ranges-breaking).
+Verified live on macOS (arm64) and Windows (x64); the in-binary FFGL
+`PluginInfo` version moves 1.000 → 3.000 in both plugins, so the host now
+reports the real version.
 
 ### Added
+- **Newest-engine preference on Windows (parity with macOS)**: the
+  `/Applications` scan was macOS-only, leaving Windows on TouchEngine's own
+  engine resolution — the gap that silently kills the echo channel when TE
+  picks an install whose engine exposes only texture outputs. Windows now scans
+  for TouchDesigner installs and calls `TEInstanceSetPreferredEnginePath` with
+  the newest one (Windows takes the installation *directory*, not a bundle).
+  The build number cannot come from the directory name here — the newest
+  install is normally the unsuffixed `TouchDesigner` folder — so it is read
+  from `bin\TouchDesigner.exe`'s version resource, with candidates gathered
+  from `HKLM\SOFTWARE\Derivative\TouchDesigner` (covers non-default install
+  locations) and `%ProgramFiles%\Derivative`. Failures to set the preferred
+  engine, and the no-install-found case, are now logged instead of silent.
+  Verified on Windows: every load logs the 2025.33070 install.
 - **Par-state echo channel (#28 second half — TD→host reflection)**: since TE
   input-link values are host-authoritative (see below), the tox can instead
   expose its parameter state through outputs, for which TE does fire per-cook
@@ -60,6 +80,14 @@ investigation notes live in [docs/knowledge/](docs/knowledge/README.md).
   fire per-cook ValueChange — tracked as a future item.
 
 ### Fixed
+- **Windows build broke on the float-range code**: `std::min`/`std::max` in the
+  range remap hit the `min`/`max` macros from `windows.h` (6 sites,
+  `C2589`/`C2059`). `NOMINMAX` is now defined — and `WIN32_LEAN_AND_MEAN` moved
+  *above* the `windows.h` include, where it had never been — with both also set
+  as compile definitions in CMake for translation units that reach `windows.h`
+  through Spout first. `<algorithm>` is now included explicitly (it arrived
+  transitively on libc++ but not MSVC). Windows had not been built since the
+  range work landed.
 - **Reload segfaulted the host — root cause: `TEEventInstanceReady`
   mis-semantics** (upstream bug, likely also behind #34-class instability).
   Per the `TEInstanceConfigure` docs, `InstanceReady` means "configure

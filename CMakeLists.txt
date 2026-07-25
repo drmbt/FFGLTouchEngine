@@ -56,6 +56,9 @@ set(CMAKE_SKIP_INSTALL_ALL_DEPENDENCY true)
 
 if (WIN32)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
+    # Belt-and-braces for translation units that reach windows.h through a
+    # third-party header (Spout) before ours gets a chance to set these.
+    add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX)
 endif()
 
 if (APPLE)

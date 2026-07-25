@@ -384,4 +384,14 @@ cmake_install.cmake
 
 # CMake build directories
 build-mac/
+build-win/
+build-baseline/
+build-modern/
 build/
+
+# Test toxes and their engine pins are machine-specific (the TouchEngine
+# link next to a tox pins which TouchDesigner build hosts the engine).
+tests/
+touchengine_tests/
+engine-2025.33070/
+engine-2023.11170/

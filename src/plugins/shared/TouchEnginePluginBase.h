@@ -1,12 +1,19 @@
 #pragma once
 
 #ifdef _WIN32
+// Both must precede windows.h. NOMINMAX suppresses the min/max macros, which
+// otherwise swallow the std::min/std::max calls in the parameter-range code.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <d3d11_4.h>
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
-#define WIN32_LEAN_AND_MEAN
 #include <wrl.h>
 #include <shobjidl.h>
 #endif

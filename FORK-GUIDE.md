@@ -31,11 +31,18 @@ holds what, and who should use it*.
 | `fix/stability` | `master` | **upstream PR #1** — anyone on v2.0.4 | Crash, race, rendering and enumeration fixes. No slot names, ranges or wire semantics change: saved compositions and OSC maps keep working. |
 | `feat/slot-naming-ranges` | `fix/stability` | **upstream PR #2** — needs a migration note in release notes | Unique static slot names, per-family ParamID counters, float range remapping. **Breaking for saved compositions and OSC/MIDI maps.** |
 | `feat/dynamic-params` | `feat/slot-naming-ranges` | **upstream PR #3** — the #28 feature | Dirty-only parameter push and the par-state echo channel (TD→host reflection). Purely additive on top of PR #2. |
-| `modernize-te` | = `feat/dynamic-params` + docs | Vincent's working branch | Everything above, plus `CHANGELOG.md`, `CLAUDE.md` and `docs/knowledge/`. `git diff feat/dynamic-params modernize-te -- src/` is empty by construction. |
+| `modernize-te` | = `feat/dynamic-params` + docs + fork version | Vincent's working branch | Everything above, plus `CHANGELOG.md`, `CLAUDE.md` and `docs/knowledge/`. `git diff feat/dynamic-params modernize-te -- src/` is **exactly the two `PluginInfo` major-version lines** (`1` → `3`) and nothing else — see below. |
 
 The three feature branches carry **source and framework only** — no CHANGELOG,
 no working notes. That keeps each PR diff about the code; the PR description
 carries the prose.
+
+**The one deliberate src difference: the fork version.** `modernize-te` sets the
+FFGL `PluginInfo` major version to `3` (fork release v3.0.0); the PR branches
+keep upstream's `1`, since the fork's version numbering is not upstream's to
+inherit. That is the *entire* expected `src/` delta — anything else appearing in
+`git diff feat/dynamic-params modernize-te -- src/` means the stack has drifted
+and needs re-splitting.
 
 Each branch builds and links on its own (`cmake --build build-modern --config
 Release`, macOS/arm64), so the maintainer can merge PR #1 and stop there.
@@ -67,6 +74,9 @@ Categories: **fix** = bug fix, no behaviour anyone depends on changes ·
 | Par-state echo channel (`EchoNameToParamID`, `MenuTokens`, `HandleEchoChop/Dat`, `ApplyEchoValue`) | additive | `feat/dynamic-params` | [Added](CHANGELOG.md#added) | **#28** |
 | Echo settling window (`LastPushFrame` / `EchoSettleFrames`) | additive | `feat/dynamic-params` | [Added](CHANGELOG.md#added) | **#28** |
 | Newest-engine preference (macOS `/Applications` scan + `TEInstanceSetPreferredEnginePath`) + configured-engine logging | additive | `feat/dynamic-params` | [Added](CHANGELOG.md#added) | **#28** (enables the echo channel) |
+| Windows build fix — `NOMINMAX` + `WIN32_LEAN_AND_MEAN` before `windows.h`, CMake compile definitions, explicit `<algorithm>` | fix | `feat/slot-naming-ranges` | [Fixed](CHANGELOG.md#fixed) | — (this branch's `std::min/max` introduced it) |
+| Windows newest-engine preference (registry + `%ProgramFiles%\Derivative` scan, ordered by `TouchDesigner.exe` version resource) + engine-path failure logging | additive | `feat/dynamic-params` | [Added](CHANGELOG.md#added) | **#28** (parity with macOS) |
+| Fork release version — `PluginInfo` major `1` → `3` | fork identity | **`modernize-te` only** | [v3.0.0](CHANGELOG.md#v300--2026-07-25-branch-modernize-te) | — (not upstream material) |
 
 ### Hunks that resisted clean separation
 
@@ -194,7 +204,10 @@ toxes loaded from unpinned folders; the configured engine path is logged at
 every load, so check the Arena log if echo isn't working. A `TouchEngine`
 file-system link next to the tox still overrides the preference — that is the
 deliberate pinning mechanism, and pinning to an old build disables the echo
-channel. **No equivalent scan exists on Windows yet** (see below).
+channel. Windows does the equivalent via the Derivative registry key and
+`%ProgramFiles%\Derivative`, ordered by `bin\TouchDesigner.exe`'s version
+resource — note `TEInstanceSetPreferredEnginePath` takes the `.app` on macOS
+but the installation *directory* on Windows.
 
 ## Verification status
 
@@ -216,9 +229,20 @@ channel. **No equivalent scan exists on Windows yet** (see below).
 [docs/knowledge/test-results-2026-07-25.md](docs/knowledge/test-results-2026-07-25.md)
 for the full record. Three Windows-only defects were found and fixed (the
 `NOMINMAX` compile break in the range code, the macOS-only engine preference,
-and unlogged engine-path failures). The individual feature branches were **not**
-rebuilt on Windows — only `modernize-te` — so the two branch-attributed fixes
-still need cherry-picking before the upstream PRs open.
+and unlogged engine-path failures).
+
+**Those fixes are now split back down the stack** (2026-07-25): the `NOMINMAX`
+build fix sits on `feat/slot-naming-ranges` — the branch whose `std::min`/
+`std::max` calls provoke it — and the Windows engine preference plus
+engine-path logging on `feat/dynamic-params`, alongside the macOS counterpart
+they mirror. `feat/dynamic-params` also picked up the explicit `<algorithm>`
+it had been missing: it uses `std::min`/`std::max` on ten lines while relying
+on transitive inclusion, which holds on libc++ but not MSVC.
+
+Caveat worth stating plainly: **only `modernize-te` has been built on Windows.**
+The per-branch split was verified by tree comparison and a macOS Release build
+of each branch, not by a Windows build of each. Building `fix/stability` and
+`feat/slot-naming-ranges` on Windows is the remaining gap before the PRs open.
 
 ### Two Windows environment traps
 
@@ -270,11 +294,13 @@ cmake --build build-modern --config Release
 7. **Echo channel.** Load a tox with a Par DAT → Out DAT and confirm TD-side par
    writes appear in the Resolume UI/REST. **If nothing arrives, check the
    engine first** — the log prints the configured engine path at every load.
-8. **Engine preference is macOS-only.** `FindNewestTouchDesignerApp()` scans
-   `/Applications` under `#ifdef __APPLE__`; Windows falls back to TE's own
-   resolution. If Windows toxes resolve to an old engine and the echo channel
-   is dead as a result, the fix is a `Program Files/Derivative` equivalent —
-   that is a known gap, not a regression.
+8. **Engine preference now covers both platforms.** `FindNewestTouchDesignerInstall()`
+   scans `/Applications` on macOS and the Derivative registry key +
+   `%ProgramFiles%\Derivative` on Windows. Every load logs the configured
+   engine path — check that first if the echo channel is dead, since a
+   mis-resolved engine is the usual cause. **This checklist item now applies
+   to `fix/stability` and `feat/slot-naming-ranges`, which have never been
+   built on Windows** — only `modernize-te` and the full stack have.
 
 Anything that fails here should be fixed on the branch that introduced it (see
 the change map above), not on `modernize-te`, so the PR branches stay honest.

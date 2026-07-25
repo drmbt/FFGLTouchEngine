@@ -176,6 +176,12 @@ protected:
 	std::unordered_map<FFUInt32, std::string> ParameterMapString;
 	std::unordered_map<FFUInt32, bool> ParameterMapBool;
 	std::set<FFUInt32> PulseParameters;
+	// ParamIDs the HOST has modified since the last push. Pushing only these
+	// (instead of every parameter every frame) is what lets TD-initiated value
+	// changes survive (#28): a blanket push stomped them one frame later, and
+	// it doubles as the echo guard — values arriving FROM TouchEngine via
+	// linkCallback are stored without dirtying, so they are never pushed back.
+	std::set<FFUInt32> DirtyParams;
 
 	// Per-family slot counters. Each family owns a contiguous pre-allocated
 	// region of MaxParamsByType slots; IDs are familyBase + counter. These must
@@ -207,6 +213,27 @@ protected:
 	//Operator link identifiers (input is only set by FX-style toxes)
 	std::string InputOpName;
 	std::string OutputOpName;
+
+	// TD->host state echo (#28 second half). TE input-link values are
+	// host-authoritative, so comp-internal par changes are invisible on input
+	// links — but TE DOES fire ValueChange for outputs. Convention: the tox
+	// exposes its par state via an Out CHOP (Par CHOP: channels named like the
+	// par components) and/or an Out DAT (Par DAT: name/value rows). These map
+	// TD par/channel names ("Rgbar", "Float") to FFGL slots, and menu tokens
+	// to option indices.
+	std::unordered_map<std::string, FFUInt32> EchoNameToParamID;
+	std::unordered_map<FFUInt32, std::vector<std::string>> MenuTokens;
+	// Frame stamp of each slot's last host-push. Echo values for a slot are
+	// ignored inside a short settling window after its push: out-link events
+	// cooked BEFORE the push land after it and would revert the host's set
+	// (observed live with a menu that was part of its own echo set).
+	std::unordered_map<FFUInt32, uint64_t> LastPushFrame;
+	static constexpr uint64_t EchoSettleFrames = 30;
+	std::string EchoChopIdentifier;
+	std::string EchoDatIdentifier;
+	void ApplyEchoValue(FFUInt32 ParamID, double numeric, const char* text);
+	void HandleEchoChop();
+	void HandleEchoDat();
 
 	int OutputWidth = 0;
 	int OutputHeight = 0;

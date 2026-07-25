@@ -8,6 +8,37 @@ to the branch that carries it (`fix/stability`, `feat/slot-naming-ranges`,
 `feat/dynamic-params`) and holds the migration and tox-authoring notes. Full
 investigation notes live in [docs/knowledge/](docs/knowledge/README.md).
 
+## v3.0.1 — 2026-07-25 (branch `modernize-te`)
+
+**No plugin behaviour change: `git diff v3.0.0 v3.0.1 -- src/` is empty.** The
+binaries are identical to what v3.0.0 would have produced. This release exists
+because v3.0.0 never built — the CI workflow's only trigger was a tag push and
+its release job had no ref guard, so no artifact was ever published for it. The
+in-binary FFGL `PluginInfo` therefore stays at `3.000`; FFGL exposes only
+major.minor, so the whole 3.0.x line reports the same version to the host.
+
+### Changed
+- **CI can actually release.** `workflow_dispatch` added, so a build can be
+  produced from any branch without minting a tag; the release job is now gated
+  on `refs/tags/`, which also prevents a non-tag run from publishing a release
+  named after a branch. Fork releases are marked prerelease until the artifact
+  itself — not merely the source it was built from — has been verified on both
+  platforms.
+- **The Windows zip's README no longer under-documents the install.** It listed
+  only the two FFGL plugins, omitting the `TouchEngine.dll` the zip has always
+  shipped and which the plugins cannot load without. It now says to copy all
+  three, and carries the two Windows traps from the parity pass (the
+  `TouchDesigner\bin` DLL is not the redistributable and fails every Configure
+  with `TEResultBadUsage`; backup copies in plugin-dir subfolders break loading
+  because Resolume scans recursively).
+- **The Windows parity fixes are split back down the PR stack** — the `NOMINMAX`
+  build fix onto `feat/slot-naming-ranges` (whose `std::min`/`std::max` provoke
+  it) and the Windows engine preference onto `feat/dynamic-params` (beside the
+  macOS counterpart). `feat/dynamic-params` also gained the explicit
+  `<algorithm>` it had been missing — it uses `std::min`/`std::max` on ten lines
+  while relying on transitive inclusion, which holds on libc++ but not MSVC.
+  See [FORK-GUIDE.md](FORK-GUIDE.md).
+
 ## v3.0.0 — 2026-07-25 (branch `modernize-te`)
 
 First fork release. Major version because the slot rename below is **breaking

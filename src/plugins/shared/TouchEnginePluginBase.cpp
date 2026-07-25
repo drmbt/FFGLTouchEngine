@@ -1,8 +1,10 @@
 #include "TouchEnginePluginBase.h"
 #include "TouchEngine/TEFloatBuffer.h"
 #include "TouchEngine/TETable.h"
+#include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <vector>
 
 FFResult FailAndLog(std::string message)
 {
@@ -318,13 +320,18 @@ bool FFGLTouchEnginePluginBase::LoadTEFile()
 	return true;
 }
 
+// Newest installed TouchDesigner, per platform. Left to its own devices TE can
+// select an old install whose engine exposes only texture output links (no
+// CHOP/DAT outputs — silently breaking the par echo channel), so we steer it to
+// the newest build. A TouchEngine file-system link next to the tox still
+// overrides this (deliberate pinning).
+//
+// TEInstanceSetPreferredEnginePath wants the .app on macOS and the installation
+// DIRECTORY on Windows.
+
 #ifdef __APPLE__
-// Newest installed TouchDesigner app by build number ("TouchDesigner.33070.app").
-// Left to its own devices TE can select an old install whose engine exposes
-// only texture output links (no CHOP/DAT outputs — silently breaking the par
-// echo channel), so we steer it to the newest build. A TouchEngine
-// file-system link next to the tox still overrides this (deliberate pinning).
-static std::string FindNewestTouchDesignerApp() {
+// Build number comes straight off the bundle name ("TouchDesigner.33070.app").
+static std::string FindNewestTouchDesignerInstall() {
 	NSFileManager* fm = [NSFileManager defaultManager];
 	NSArray<NSString*>* entries = [fm contentsOfDirectoryAtPath:@"/Applications" error:nil];
 	long bestBuild = -1;
@@ -348,6 +355,118 @@ static std::string FindNewestTouchDesignerApp() {
 }
 #endif
 
+#ifdef _WIN32
+#pragma comment(lib, "version.lib")
+
+// Comparable build key for one install, read from bin\TouchDesigner.exe's
+// version resource (ProductVersion is major.minor.year.build — e.g.
+// 0.99.2025.33070). The DIRECTORY NAME is not a usable source on Windows: the
+// newest install is normally the unsuffixed "TouchDesigner" folder, which
+// carries no build number at all, while older ones are "TouchDesigner.2025.32820".
+// Returns 0 when the path is not a TouchDesigner install.
+static unsigned long long TouchDesignerBuildKey(const std::wstring& installDir) {
+	std::wstring exe = installDir + L"\\bin\\TouchDesigner.exe";
+	DWORD ignored = 0;
+	DWORD size = GetFileVersionInfoSizeW(exe.c_str(), &ignored);
+	if (size == 0) {
+		return 0;
+	}
+	std::vector<BYTE> buffer(size);
+	if (!GetFileVersionInfoW(exe.c_str(), 0, size, buffer.data())) {
+		return 0;
+	}
+	VS_FIXEDFILEINFO* info = nullptr;
+	UINT infoLen = 0;
+	if (!VerQueryValueW(buffer.data(), L"\\", reinterpret_cast<LPVOID*>(&info), &infoLen) || info == nullptr) {
+		return 0;
+	}
+	// major/minor are identical across builds, so this orders by year then build.
+	return (static_cast<unsigned long long>(info->dwProductVersionMS) << 32) | info->dwProductVersionLS;
+}
+
+static void AddInstallCandidate(std::vector<std::wstring>& candidates, const std::wstring& dir) {
+	if (dir.empty()) {
+		return;
+	}
+	for (const std::wstring& existing : candidates) {
+		if (_wcsicmp(existing.c_str(), dir.c_str()) == 0) {
+			return;
+		}
+	}
+	candidates.push_back(dir);
+}
+
+static std::string FindNewestTouchDesignerInstall() {
+	std::vector<std::wstring> candidates;
+
+	// Derivative records every install directory under Path/Path_<n>. This is
+	// also where TE itself looks, so it covers non-default install locations.
+	HKEY key = nullptr;
+	if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Derivative\\TouchDesigner", 0,
+			KEY_READ, &key) == ERROR_SUCCESS) {
+		for (DWORD i = 0;; ++i) {
+			wchar_t name[256] = {};
+			wchar_t value[MAX_PATH + 1] = {};
+			DWORD nameLen = static_cast<DWORD>(std::size(name));
+			DWORD valueBytes = static_cast<DWORD>(sizeof(value) - sizeof(wchar_t));
+			DWORD type = 0;
+			LSTATUS status = RegEnumValueW(key, i, name, &nameLen, nullptr, &type,
+				reinterpret_cast<LPBYTE>(value), &valueBytes);
+			if (status == ERROR_NO_MORE_ITEMS) {
+				break;
+			}
+			// A single unreadable value (e.g. one too long for the buffer) must
+			// not abandon the rest of the enumeration.
+			if (status != ERROR_SUCCESS || type != REG_SZ) {
+				continue;
+			}
+			if (_wcsnicmp(name, L"Path", 4) == 0) {
+				AddInstallCandidate(candidates, value);
+			}
+		}
+		RegCloseKey(key);
+	}
+
+	// Default install root, in case the registry is missing or stale.
+	wchar_t programFiles[MAX_PATH] = {};
+	DWORD written = GetEnvironmentVariableW(L"ProgramFiles", programFiles, MAX_PATH);
+	if (written > 0 && written < MAX_PATH) {
+		std::wstring root = std::wstring(programFiles) + L"\\Derivative\\";
+		WIN32_FIND_DATAW found = {};
+		HANDLE search = FindFirstFileW((root + L"TouchDesigner*").c_str(), &found);
+		if (search != INVALID_HANDLE_VALUE) {
+			do {
+				if (found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+					AddInstallCandidate(candidates, root + found.cFileName);
+				}
+			} while (FindNextFileW(search, &found));
+			FindClose(search);
+		}
+	}
+
+	unsigned long long bestKey = 0;
+	std::wstring best;
+	for (const std::wstring& dir : candidates) {
+		unsigned long long buildKey = TouchDesignerBuildKey(dir);
+		if (buildKey > bestKey) {
+			bestKey = buildKey;
+			best = dir;
+		}
+	}
+	if (best.empty()) {
+		return std::string();
+	}
+
+	int bytes = WideCharToMultiByte(CP_UTF8, 0, best.c_str(), -1, nullptr, 0, nullptr, nullptr);
+	if (bytes <= 1) {
+		return std::string();
+	}
+	std::string utf8(static_cast<size_t>(bytes) - 1, '\0');
+	WideCharToMultiByte(CP_UTF8, 0, best.c_str(), -1, utf8.data(), bytes, nullptr, nullptr);
+	return utf8;
+}
+#endif
+
 void FFGLTouchEnginePluginBase::LoadTouchEngine() {
 
 	if (instance == nullptr) {
@@ -360,16 +479,22 @@ void FFGLTouchEnginePluginBase::LoadTouchEngine() {
 			return;
 		}
 
-#ifdef __APPLE__
-		std::string newestTD = FindNewestTouchDesignerApp();
+		std::string newestTD = FindNewestTouchDesignerInstall();
 		if (!newestTD.empty()) {
 			result = TEInstanceSetPreferredEnginePath(instance, newestTD.c_str());
 			if (result == TEResultSuccess) {
 				FFGLLog::LogToHost((std::string("FFGLTouchEngine: preferred engine: ") + newestTD +
 					" (a TouchEngine link next to the tox overrides this)").c_str());
 			}
+			else {
+				FFGLLog::LogToHost((std::string("FFGLTouchEngine: could not prefer engine ") + newestTD +
+					": " + TEResultGetDescription(result)).c_str());
+			}
 		}
-#endif
+		else {
+			FFGLLog::LogToHost("FFGLTouchEngine: no TouchDesigner install found; "
+				"leaving engine selection to TouchEngine");
+		}
 
 	}
 

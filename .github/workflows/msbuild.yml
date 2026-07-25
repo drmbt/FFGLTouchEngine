@@ -9,12 +9,22 @@ on:
   push:
     tags:
       - '*'
-  # Manual builds for testing, without minting a tag or publishing a release.
-  # The artifacts land on the run page and via `gh run download`.
+  # Manual builds. Leave `version` empty to just produce artifacts; set it to a
+  # tag name to also publish the release. Tag pushes do not reliably trigger
+  # workflows on this fork (v3.0.0 and v3.0.1 both pushed without starting a
+  # run), so dispatch is the supported path to a release here.
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Tag to build and publish (e.g. v3.0.1). Empty = artifacts only, no release.'
+        required: false
+        default: ''
 
 env:
   BUILD_CONFIGURATION: Release
+  # Tag name on a tag push; the dispatch input when publishing manually;
+  # otherwise the branch name, which is fine for artifact-only builds.
+  VERSION: ${{ github.event.inputs.version || github.ref_name }}
 
 permissions:
   contents: write
@@ -41,14 +51,14 @@ jobs:
         "Copy ALL THREE DLLs (FFGLTouchEngine.dll, FFGLTouchEngineFX.dll, TouchEngine.dll) into your Resolume plugins folder, e.g. Documents\Resolume Arena\Extra Effects." | Out-File staging\README.txt
         "TouchEngine.dll here is the redistributable client library and is required. Do NOT substitute the one from TouchDesigner\bin - that is an internal component and every load fails with TEResultBadUsage." | Out-File staging\README.txt -Append
         "Do not place backup copies in subfolders of the plugin dir: Resolume scans recursively and duplicate FFGL IDs break loading." | Out-File staging\README.txt -Append
-        "${{ github.ref_name }}" | Out-File staging\VERSION.txt
-        Compress-Archive -Path staging\* -Destination "FFGLTouchEngine-Windows-${{ github.ref_name }}.zip"
+        "${{ env.VERSION }}" | Out-File staging\VERSION.txt
+        Compress-Archive -Path staging\* -Destination "FFGLTouchEngine-Windows-${{ env.VERSION }}.zip"
 
     - name: Upload Windows Artifact
       uses: actions/upload-artifact@v4
       with:
         name: windows-build
-        path: "FFGLTouchEngine-Windows-${{ github.ref_name }}.zip"
+        path: "FFGLTouchEngine-Windows-${{ env.VERSION }}.zip"
 
   build-macos:
     runs-on: macos-latest
@@ -71,7 +81,7 @@ jobs:
     - name: Generate Zip
       run: |
         cd build-mac/Release
-        zip -r "../../FFGLTouchEngine-macOS-${{ github.ref_name }}.zip" \
+        zip -r "../../FFGLTouchEngine-macOS-${{ env.VERSION }}.zip" \
           FFGLTouchEngine.bundle \
           FFGLTouchEngineFX.bundle
 
@@ -79,15 +89,15 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: macos-build
-        path: "FFGLTouchEngine-macOS-${{ github.ref_name }}.zip"
+        path: "FFGLTouchEngine-macOS-${{ env.VERSION }}.zip"
 
   release:
     needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
-    # Only tag pushes publish. A workflow_dispatch run still produces both
-    # artifacts to download, but must never create a release named after a
-    # branch (github.ref_name is the branch, not a version, when dispatched).
-    if: startsWith(github.ref, 'refs/tags/')
+    # Publish on a tag push, or on a dispatch that named a version. A dispatch
+    # with no version still produces both artifacts but must never create a
+    # release named after a branch.
+    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.version != ''
 
     steps:
     - name: Download Windows Artifact
@@ -103,7 +113,10 @@ jobs:
     - name: Generate Release
       uses: ncipollo/release-action@v1
       with:
-        artifacts: "FFGLTouchEngine-Windows-${{ github.ref_name }}.zip,FFGLTouchEngine-macOS-${{ github.ref_name }}.zip"
+        artifacts: "FFGLTouchEngine-Windows-${{ env.VERSION }}.zip,FFGLTouchEngine-macOS-${{ env.VERSION }}.zip"
+        # Explicit: on a dispatch github.ref is a branch, so the action cannot
+        # infer the tag. The tag must already exist and point at this commit.
+        tag: ${{ env.VERSION }}
         generateReleaseNotes: true
         # Fork builds stay prereleases until the artifact itself has been
         # verified on both platforms — not just the source it was built from.

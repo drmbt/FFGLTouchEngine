@@ -1,5 +1,15 @@
 # FFGLTouchEngine For Resolume
 
+> **This is drmbt's fork of [medcelerate/FFGLTouchEngine](https://github.com/medcelerate/FFGLTouchEngine).**
+> The default branch mirrors upstream v2.0.4. The fork work lives on
+> **`modernize-te`** (crash/stability fixes, unique slot names, float range
+> remapping, and TD→host parameter reflection for issue #28), split into three
+> stacked branches for upstream PRs.
+> Start with **[FORK-GUIDE.md](FORK-GUIDE.md)** — branch map, what changed and
+> why, migration notes, and tox-authoring conventions.
+> Per-change detail is in [CHANGELOG.md](CHANGELOG.md).
+> macOS-verified; **not yet verified on Windows**.
+
 Simple FFGL plugin that allows loading touchdesigner components (tox) into programs like resolume. 
 
 ### Notice

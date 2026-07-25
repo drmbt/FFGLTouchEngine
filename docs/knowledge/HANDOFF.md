@@ -96,7 +96,11 @@ are open — the Windows pass gates that.**
 Remaining queue:
 1. **Windows pass** (Vincent): R/B swap presence, all fixes compile/behave;
    the macOS-only engine-preference scan needs a Windows equivalent
-   (Program Files/Derivative scan).
+   (Program Files/Derivative scan). **Step-by-step checklist is in
+   FORK-GUIDE.md → "Windows verification checklist"** — clone `modernize-te`
+   (it has everything), work the 8 items, and log results as a new
+   `docs/knowledge/test-results-<date>.md`. Fix any failure on the branch that
+   introduced it, not on modernize-te, so the PR branches stay honest.
 2. Color-picker UI spike (RGBA renders as 4 faders; Arena may never group
    FFGL R/G/B/A into its native picker).
 3. Int range remap (ints unscaled within +/-10000 prototype).

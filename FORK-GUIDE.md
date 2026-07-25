@@ -12,6 +12,17 @@ the breaking rename or the new feature surface. [CHANGELOG.md](CHANGELOG.md) is
 the authoritative per-change record; this file is the decoder for *which branch
 holds what, and who should use it*.
 
+> **Which branch has everything? → `modernize-te`.**
+> It is the working branch: all three feature branches plus `CHANGELOG.md`,
+> `FORK-GUIDE.md` and `docs/knowledge/`. Build and run this one unless you are
+> specifically reviewing a single upstream PR.
+>
+> ```
+> git clone https://github.com/drmbt/FFGLTouchEngine.git
+> cd FFGLTouchEngine
+> git checkout modernize-te
+> ```
+
 ## Branch map
 
 | Branch | Base | Audience | Contents |
@@ -205,6 +216,50 @@ channel. **No equivalent scan exists on Windows yet** (see below).
 Spout paths, and none of the changed code is macOS-only except the flicker fix,
 the shader swizzle and the engine-path scan — but "should be fine" is not
 verification. A Windows pass gates opening the upstream PRs.
+
+### Windows verification checklist
+
+Build `modernize-te` (it contains everything) and work down this list. Record
+results in `docs/knowledge/` as a new `test-results-<date>.md`.
+
+```
+git clone https://github.com/drmbt/FFGLTouchEngine.git
+cd FFGLTouchEngine
+git checkout modernize-te
+cmake -B build-modern
+cmake --build build-modern --config Release
+```
+
+1. **It compiles.** The D3D11/Spout paths are untouched by this fork but have
+   never been built against the updated framework. Any compile break here is
+   the framework bump (`309f7e9`), not the logic.
+2. **Colour is correct.** The `.bgra` swizzle removal is inside `#ifdef __APPLE__`
+   shader source — confirm Windows output is *unchanged* (no red/blue swap
+   introduced). If Windows red/blue is now wrong, the swizzle guard is the
+   suspect.
+3. **Reload gauntlet.** Pulse Reload 3× on a *playing* FX clip. Expect: host
+   alive, full re-enumeration each time, no `Failed to set double value` spam
+   in the log. This is the crash that motivated the whole `fix/stability`
+   branch — it is the single most important Windows check.
+4. **Tox path change mid-load.** Change the Tox File while a load is in flight;
+   the new tox must end up loaded (queued-supersede), not the old one.
+5. **Enumeration.** A tox with all parameter families (float, int, toggle, text,
+   pulse, menu ×2, colour) must expose every slot, with **both** menus driving
+   independently. Check slot names read `Float1`, `Menu2`, `Color1R`, `Pulse2`.
+6. **Float ranges.** An unranged TD float defaulting outside 0–1 must survive
+   the round trip, and the host readout must show the real TD value, not the
+   normalized position.
+7. **Echo channel.** Load a tox with a Par DAT → Out DAT and confirm TD-side par
+   writes appear in the Resolume UI/REST. **If nothing arrives, check the
+   engine first** — the log prints the configured engine path at every load.
+8. **Engine preference is macOS-only.** `FindNewestTouchDesignerApp()` scans
+   `/Applications` under `#ifdef __APPLE__`; Windows falls back to TE's own
+   resolution. If Windows toxes resolve to an old engine and the echo channel
+   is dead as a result, the fix is a `Program Files/Derivative` equivalent —
+   that is a known gap, not a regression.
+
+Anything that fails here should be fixed on the branch that introduced it (see
+the change map above), not on `modernize-te`, so the PR branches stay honest.
 
 ## Known issues (carried, not introduced)
 

@@ -38,7 +38,9 @@ jobs:
         Copy-Item "build\src\plugins\FFGLTouchEngine\Release\FFGLTouchEngine.dll" staging\
         Copy-Item "build\src\plugins\FFGLTouchEngineFX\Release\FFGLTouchEngineFX.dll" staging\
         Copy-Item "lib\TouchEngine\TouchEngine.dll" staging\
-        "Copy FFGLTouchEngine.dll and FFGLTouchEngineFX.dll to your Resolume plugins folder" | Out-File staging\README.txt
+        "Copy ALL THREE DLLs (FFGLTouchEngine.dll, FFGLTouchEngineFX.dll, TouchEngine.dll) into your Resolume plugins folder, e.g. Documents\Resolume Arena\Extra Effects." | Out-File staging\README.txt
+        "TouchEngine.dll here is the redistributable client library and is required. Do NOT substitute the one from TouchDesigner\bin - that is an internal component and every load fails with TEResultBadUsage." | Out-File staging\README.txt -Append
+        "Do not place backup copies in subfolders of the plugin dir: Resolume scans recursively and duplicate FFGL IDs break loading." | Out-File staging\README.txt -Append
         "${{ github.ref_name }}" | Out-File staging\VERSION.txt
         Compress-Archive -Path staging\* -Destination "FFGLTouchEngine-Windows-${{ github.ref_name }}.zip"
 

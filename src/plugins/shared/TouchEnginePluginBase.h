@@ -203,6 +203,21 @@ protected:
 	std::string InputOpName;
 	std::string OutputOpName;
 
+	// TD->host state echo (#28 second half). TE input-link values are
+	// host-authoritative, so comp-internal par changes are invisible on input
+	// links — but TE DOES fire ValueChange for outputs. Convention: the tox
+	// exposes its par state via an Out CHOP (Par CHOP: channels named like the
+	// par components) and/or an Out DAT (Par DAT: name/value rows). These map
+	// TD par/channel names ("Rgbar", "Float") to FFGL slots, and menu tokens
+	// to option indices.
+	std::unordered_map<std::string, FFUInt32> EchoNameToParamID;
+	std::unordered_map<FFUInt32, std::vector<std::string>> MenuTokens;
+	std::string EchoChopIdentifier;
+	std::string EchoDatIdentifier;
+	void ApplyEchoValue(FFUInt32 ParamID, double numeric, const char* text);
+	void HandleEchoChop();
+	void HandleEchoDat();
+
 	int OutputWidth = 0;
 	int OutputHeight = 0;
 

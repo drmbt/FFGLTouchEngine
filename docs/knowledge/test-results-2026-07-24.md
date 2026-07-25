@@ -158,3 +158,40 @@ now hold the last frame). Then A/B vs the baseline bundles in
 ~/Documents/Resolume Arena/_plugin-backups/. Ground truth + details:
 docs/knowledge/test-results-2026-07-24.md.
 ```
+
+## #28 echo-channel session (2026-07-24 evening)
+
+Hard-won facts, verified against instrumented builds + probe toxes:
+
+1. **TE input links are host-authoritative** (the #28 wall): comp-internal
+   writes to root custom pars fire no `ValueChange` AND are invisible to
+   `TEInstanceLinkGet*Value` (a 2s poll returned the host value while the par
+   sat at a different value TD-side). Reflection must ride OUTPUT links.
+2. **Echo convention implemented**: Par CHOP→Out CHOP (FloatBuffer) and/or
+   Par DAT→Out DAT (StringData). Channel/row names are TD par-component
+   script names (`Rgbar`, `Floatunranged`, `Resolutionwhw`); the plugin maps
+   them via `EchoNameToParamID` built at enumeration (vector children =
+   par name + lowercased RGBA/XYZW/WH suffix). Menus: DAT rows carry the
+   TOKEN (mapped via `TEInstanceLinkGetChoiceValues`), CHOP channels carry
+   the INDEX. Verified live: preset-recall writes appear in Resolume.
+3. **Engine build gates output-link types**: the unpinned `Example/` folder
+   resolved an engine that exposes only the texture output (og/out → op/out1
+   alone, no Added events ever). Pinning 2025.33070 via the folder symlink
+   exposed all three (out1 texture, out2 FloatBuffer, out3 StringData).
+   ALWAYS pin the engine for echo toxes.
+4. **Menu self-echo race**: when the echoed par set includes a par the host
+   just pushed (the preset menu itself), a stale cook's echo can arrive after
+   the push cleared the dirty flag and revert the host's set. Vincent's
+   tox-side fix: Select out the menu from the echo. Planned in-code fix:
+   per-param grace window after a push during which non-matching echo values
+   are ignored.
+5. Lag-smoothing the ECHO (probe9) is the wrong place — it fights the grace
+   semantics and only smooths the report, not the par. Correct approach:
+   lag/filter the writes into `parent().par.*` inside the tox (planned).
+6. TD "Multiple New Plugins Detected" spam: approvals persist to a json in
+   the Custom OP Plugins dir — a root-owned dir silently blocks the write
+   (fixed with chown).
+7. Skill TODO: extend `.claude/skills/ffgl-tox-effect` with the echo-channel
+   authoring convention (Par CHOP/DAT → Out, engine symlink pinning, menu
+   exclusion or grace-window reliance) — "prepare a component as an Engine
+   effect" checklist.

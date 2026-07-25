@@ -1,4 +1,8 @@
 #include "TouchEnginePluginBase.h"
+#include "TouchEngine/TEFloatBuffer.h"
+#include "TouchEngine/TETable.h"
+#include <cctype>
+#include <cmath>
 
 FFResult FailAndLog(std::string message)
 {
@@ -575,6 +579,10 @@ void FFGLTouchEnginePluginBase::ResetBaseParameters() {
 	ParameterMapBool.clear();
 	ParameterRanges.clear();
 	DirtyParams.clear();
+	EchoNameToParamID.clear();
+	MenuTokens.clear();
+	EchoChopIdentifier.clear();
+	EchoDatIdentifier.clear();
 	PulseParameters.clear();
 	FloatParamCount = 0;
 	IntParamCount = 0;
@@ -672,14 +680,23 @@ void FFGLTouchEnginePluginBase::GetAllParameters() {
 			}
 
 			if (linkInfo->domain == TELinkDomainOperator) {
-				if (strcmp(linkInfo->name, "out1") == 0 && linkInfo->type == TELinkTypeTexture) {
-					OutputOpName = linkInfo->identifier;
-					hasVideoOutput = true;
-					break;
-				} else if (linkInfo->type == TELinkTypeTexture) {
-					OutputOpName = linkInfo->identifier;
-					hasVideoOutput = true;
-					break;
+				if (linkInfo->type == TELinkTypeTexture) {
+					if (!hasVideoOutput) {
+						OutputOpName = linkInfo->identifier;
+						hasVideoOutput = true;
+					}
+				} else if (linkInfo->type == TELinkTypeFloatBuffer) {
+					// Par-state echo channel (Out CHOP fed by a Par CHOP)
+					if (EchoChopIdentifier.empty()) {
+						EchoChopIdentifier = linkInfo->identifier;
+						FFGLLog::LogToHost((std::string("FFGLTouchEngine: par echo CHOP registered: ") + EchoChopIdentifier).c_str());
+					}
+				} else if (linkInfo->type == TELinkTypeStringData) {
+					// Par-state echo channel (Out DAT fed by a Par DAT)
+					if (EchoDatIdentifier.empty()) {
+						EchoDatIdentifier = linkInfo->identifier;
+						FFGLLog::LogToHost((std::string("FFGLTouchEngine: par echo DAT registered: ") + EchoDatIdentifier).c_str());
+					}
 				}
 			}
 		}
@@ -790,6 +807,12 @@ void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELi
 				ActiveParams.insert(ParamID);
 				ActiveVectorParams.insert(ParamID);
 				info.children[i] = ParamID;
+				if (linkInfo->name != nullptr && i < Suffix.size()) {
+					// TD names vector components par-name + lowercase suffix
+					// ("Rgba" -> "Rgbar"), which is how Par CHOP channels and
+					// Par DAT rows refer to them.
+					EchoNameToParamID[std::string(linkInfo->name) + (char)std::tolower(Suffix[i])] = ParamID;
+				}
 
 				ParameterMapFloat[ParamID] = value[i];
 				if (!(linkInfo->intent == TELinkIntentColorRGBA && i < 4)) {
@@ -840,6 +863,7 @@ void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELi
 		uint32_t ParamID = OffsetParamsByType + FloatParamCount++;
 		Parameters.push_back(std::make_pair(linkInfo->identifier, ParamID));
 		ActiveParams.insert(ParamID);
+		if (linkInfo->name != nullptr) EchoNameToParamID[linkInfo->name] = ParamID;
 		ParameterMapType[ParamID] = FF_TYPE_STANDARD;
 		ParameterMapFloat[ParamID] = value;
 		ParameterRanges[ParamID] = EffectiveRange(min, max, value);
@@ -886,6 +910,19 @@ void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELi
 
 			Parameters.push_back(std::make_pair(linkInfo->identifier, ParamID));
 			ActiveParams.insert(ParamID);
+			if (linkInfo->name != nullptr) EchoNameToParamID[linkInfo->name] = ParamID;
+			{
+				// Menu tokens (choice VALUES, not labels) let the DAT echo map a
+				// token like "red" back to its option index.
+				TouchObject<TEStringArray> tokens;
+				if (TEInstanceLinkGetChoiceValues(instance, linkInfo->identifier, tokens.take()) == TEResultSuccess && tokens) {
+					std::vector<std::string> tokenVector;
+					for (int k = 0; k < tokens->count; k++) {
+						tokenVector.push_back(tokens->strings[k]);
+					}
+					MenuTokens[ParamID] = tokenVector;
+				}
+			}
 			SetParamDisplayName(ParamID, linkInfo->label, true);
 			ParameterMapType[ParamID] = FF_TYPE_OPTION;
 			ParameterMapInt[ParamID] = value;
@@ -920,6 +957,7 @@ void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELi
 			uint32_t ParamID = MaxParamsByType + OffsetParamsByType + IntParamCount++;
 			Parameters.push_back(std::make_pair(linkInfo->identifier, ParamID));
 			ActiveParams.insert(ParamID);
+			if (linkInfo->name != nullptr) EchoNameToParamID[linkInfo->name] = ParamID;
 			ParameterMapType[ParamID] = FF_TYPE_INTEGER;
 			SetParamDisplayName(ParamID, linkInfo->label, true);
 			ParameterMapInt[ParamID] = value;
@@ -948,6 +986,7 @@ void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELi
 			uint32_t ParamID = (MaxParamsByType * 4) + OffsetParamsByType + EventParamCount++;
 			Parameters.push_back(std::make_pair(linkInfo->identifier, ParamID));
 			ActiveParams.insert(ParamID);
+			if (linkInfo->name != nullptr) EchoNameToParamID[linkInfo->name] = ParamID;
 			ParameterMapType[ParamID] = FF_TYPE_EVENT;
 
 			if (linkInfo->intent == TELinkIntentPulse) {
@@ -973,6 +1012,7 @@ void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELi
 			uint32_t ParamID = (MaxParamsByType * 2) + OffsetParamsByType + BoolParamCount++;
 			Parameters.push_back(std::make_pair(linkInfo->identifier, ParamID));
 			ActiveParams.insert(ParamID);
+			if (linkInfo->name != nullptr) EchoNameToParamID[linkInfo->name] = ParamID;
 			ParameterMapType[ParamID] = FF_TYPE_BOOLEAN;
 			SetParamDisplayName(ParamID, linkInfo->label, true);
 			ParameterMapBool[ParamID] = value;
@@ -998,6 +1038,7 @@ void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELi
 		uint32_t ParamID = (MaxParamsByType * 3) + OffsetParamsByType + StringParamCount++;
 		Parameters.push_back(std::make_pair(linkInfo->identifier, ParamID));
 		ActiveParams.insert(ParamID);
+		if (linkInfo->name != nullptr) EchoNameToParamID[linkInfo->name] = ParamID;
 		ParameterMapType[ParamID] = FF_TYPE_TEXT;
 		SetParamDisplayName(ParamID, linkInfo->label, true);
 		ParameterMapString[ParamID] = value->string;
@@ -1230,14 +1271,185 @@ void FFGLTouchEnginePluginBase::eventCallback(TEEvent event, TEResult result, in
 	}
 }
 
+// Apply one TD-originated value to an FFGL slot (#28 echo channel). 'text' is
+// non-null for DAT-sourced values (menu tokens, strings); numeric carries the
+// parsed number for both sources. Values are stored WITHOUT dirtying so they
+// are never pushed back (echo guard), and the host is only poked on change.
+void FFGLTouchEnginePluginBase::ApplyEchoValue(FFUInt32 ParamID, double numeric, const char* text) {
+	// A host-modified value that hasn't been pushed yet must win over the echo,
+	// otherwise the echo reflects TD's OLD state over the pending set and the
+	// push never carries the user's change (observed live as menu sets being
+	// reverted before they reached TE).
+	if (DirtyParams.find(ParamID) != DirtyParams.end()) {
+		return;
+	}
+	switch (ParameterMapType[ParamID]) {
+	case FF_TYPE_STANDARD:
+	case FF_TYPE_RED:
+	case FF_TYPE_GREEN:
+	case FF_TYPE_BLUE:
+	case FF_TYPE_ALPHA:
+	{
+		if (ParameterMapFloat[ParamID] == numeric) {
+			return;
+		}
+		ParameterMapFloat[ParamID] = numeric;
+		auto range = ParameterRanges.find(ParamID);
+		if (range != ParameterRanges.end()) {
+			range->second.first = std::min(range->second.first, numeric);
+			range->second.second = std::max(range->second.second, numeric);
+		}
+		RaiseParamEvent(ParamID, FF_EVENT_FLAG_VALUE);
+		return;
+	}
+	case FF_TYPE_INTEGER:
+	{
+		int32_t value = static_cast<int32_t>(std::lround(numeric));
+		if (ParameterMapInt[ParamID] == value) {
+			return;
+		}
+		ParameterMapInt[ParamID] = value;
+		RaiseParamEvent(ParamID, FF_EVENT_FLAG_VALUE);
+		return;
+	}
+	case FF_TYPE_OPTION:
+	{
+		int32_t index = static_cast<int32_t>(std::lround(numeric));
+		if (text != nullptr) {
+			// DAT rows carry the menu TOKEN ("red"); map it to its index.
+			auto tokens = MenuTokens.find(ParamID);
+			if (tokens != MenuTokens.end()) {
+				for (size_t k = 0; k < tokens->second.size(); k++) {
+					if (tokens->second[k] == text) {
+						index = static_cast<int32_t>(k);
+						break;
+					}
+				}
+			}
+		}
+		if (ParameterMapInt[ParamID] == index) {
+			return;
+		}
+		ParameterMapInt[ParamID] = index;
+		RaiseParamEvent(ParamID, FF_EVENT_FLAG_VALUE);
+		return;
+	}
+	case FF_TYPE_BOOLEAN:
+	{
+		bool value = numeric != 0.0;
+		if (ParameterMapBool[ParamID] == value) {
+			return;
+		}
+		ParameterMapBool[ParamID] = value;
+		RaiseParamEvent(ParamID, FF_EVENT_FLAG_VALUE);
+		return;
+	}
+	case FF_TYPE_TEXT:
+	{
+		if (text == nullptr || ParameterMapString[ParamID] == text) {
+			return;
+		}
+		ParameterMapString[ParamID] = text;
+		RaiseParamEvent(ParamID, FF_EVENT_FLAG_VALUE);
+		return;
+	}
+	default:
+		// FF_TYPE_EVENT: pulse buttons are stateless on the host side.
+		return;
+	}
+}
+
+void FFGLTouchEnginePluginBase::HandleEchoChop() {
+	TouchObject<TEFloatBuffer> buffer;
+	if (TEInstanceLinkGetFloatBufferValue(instance, EchoChopIdentifier.c_str(), TELinkValueCurrent, buffer.take()) != TEResultSuccess || !buffer) {
+		return;
+	}
+	int32_t channels = TEFloatBufferGetChannelCount(buffer);
+	uint32_t samples = TEFloatBufferGetValueCount(buffer);
+	const char* const* names = TEFloatBufferGetChannelNames(buffer);
+	const float* const* values = TEFloatBufferGetValues(buffer);
+	if (channels <= 0 || samples == 0 || names == nullptr || values == nullptr) {
+		return;
+	}
+	for (int32_t c = 0; c < channels; c++) {
+		if (names[c] == nullptr || values[c] == nullptr) {
+			continue;
+		}
+		auto slot = EchoNameToParamID.find(names[c]);
+		if (slot == EchoNameToParamID.end()) {
+			continue;
+		}
+		ApplyEchoValue(slot->second, values[c][0], nullptr);
+	}
+}
+
+void FFGLTouchEnginePluginBase::HandleEchoDat() {
+	TouchObject<TETable> table;
+	if (TEInstanceLinkGetTableValue(instance, EchoDatIdentifier.c_str(), TELinkValueCurrent, table.take()) != TEResultSuccess || !table) {
+		return;
+	}
+	int32_t rows = TETableGetRowCount(table);
+	int32_t cols = TETableGetColumnCount(table);
+	if (rows < 1 || cols < 2) {
+		return;
+	}
+	// Par DAT layout: columns name/value[/eval/style...], optional header row.
+	int32_t nameCol = 0, valueCol = 1, firstRow = 0;
+	const char* header = TETableGetStringValue(table, 0, 0);
+	if (header != nullptr && strcmp(header, "name") == 0) {
+		firstRow = 1;
+		for (int32_t c = 0; c < cols; c++) {
+			const char* colName = TETableGetStringValue(table, 0, c);
+			if (colName == nullptr) continue;
+			if (strcmp(colName, "name") == 0) nameCol = c;
+			else if (strcmp(colName, "value") == 0) valueCol = c;
+		}
+	}
+	for (int32_t r = firstRow; r < rows; r++) {
+		const char* name = TETableGetStringValue(table, r, nameCol);
+		const char* value = TETableGetStringValue(table, r, valueCol);
+		if (name == nullptr || value == nullptr) {
+			continue;
+		}
+		auto slot = EchoNameToParamID.find(name);
+		if (slot == EchoNameToParamID.end()) {
+			continue;
+		}
+		double numeric = 0;
+		try { numeric = std::stod(value); } catch (...) {}
+		ApplyEchoValue(slot->second, numeric, value);
+	}
+}
+
 void FFGLTouchEnginePluginBase::linkCallback(TELinkEvent event, const char* identifier) {
 	if (isBeingDestroyed) {
 		return;
 	}
 	switch (event) {
 	case TELinkEventAdded:
-		// A link has been added
+	{
+		// Echo outputs (Out CHOP/DAT) can be registered by the engine lazily,
+		// after enumeration has already walked the output scope — catch them
+		// here. Parameter links added late are still handled by re-enumeration.
+		if (identifier == nullptr || instance == nullptr) {
+			break;
+		}
+		std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
+		TouchObject<TELinkInfo> linkInfo;
+		if (TEInstanceLinkGetInfo(instance, identifier, linkInfo.take()) != TEResultSuccess) {
+			break;
+		}
+		if (linkInfo->domain == TELinkDomainOperator) {
+			if (linkInfo->type == TELinkTypeFloatBuffer && EchoChopIdentifier.empty()) {
+				EchoChopIdentifier = identifier;
+				FFGLLog::LogToHost((std::string("FFGLTouchEngine: par echo CHOP registered (late): ") + EchoChopIdentifier).c_str());
+			} else if (linkInfo->type == TELinkTypeStringData && EchoDatIdentifier.empty()) {
+				EchoDatIdentifier = identifier;
+				FFGLLog::LogToHost((std::string("FFGLTouchEngine: par echo DAT registered (late): ") + EchoDatIdentifier).c_str());
+			}
+		}
 		break;
+	}
 	case TELinkEventRemoved:
 	{
 		// Safety net: if TE tears down a link we hold an identifier for (an
@@ -1277,6 +1489,21 @@ void FFGLTouchEnginePluginBase::linkCallback(TELinkEvent event, const char* iden
 		// on out1) fire ValueChange every frame — skip them before taking the
 		// lock; only parameter links are reflected.
 		if (InputOpName == identifier || OutputOpName == identifier) {
+			break;
+		}
+		if (EchoChopIdentifier == identifier || EchoDatIdentifier == identifier) {
+			// Par-state echo channel (#28): the tox exposes its parameter state
+			// through an Out CHOP / Out DAT; their per-cook ValueChange is our
+			// only window into TD-initiated par changes.
+			std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
+			if (!isTouchEngineReady) {
+				break;
+			}
+			if (EchoChopIdentifier == identifier) {
+				HandleEchoChop();
+			} else {
+				HandleEchoDat();
+			}
 			break;
 		}
 		// NOTE (#28, verified empirically 2026-07-24): TouchEngine treats input

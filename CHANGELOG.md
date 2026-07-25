@@ -9,6 +9,29 @@ upstream PR description. Full investigation notes live in
 ## Unreleased / branch `modernize-te`
 
 ### Added
+- **Par-state echo channel (#28 second half — TD→host reflection)**: since TE
+  input-link values are host-authoritative (see below), the tox can instead
+  expose its parameter state through outputs, for which TE does fire per-cook
+  `ValueChange`. Convention: a Par CHOP → Out CHOP (`TELinkTypeFloatBuffer`,
+  channels named like the par components, e.g. `Rgbar`) and/or a Par DAT →
+  Out DAT (`TELinkTypeStringData`, `name`/`value` rows with optional header).
+  The plugin registers the first FloatBuffer and first StringData output link
+  (at enumeration or when added late) and maps TD par-component names back to
+  FFGL slots — floats/ints/toggles from either channel, menu tokens (DAT) or
+  indices (CHOP) to option slots, strings from the DAT. Echo values never
+  mark parameters dirty, so they are not pushed back. A pending host set
+  always beats the echo (dirty-wins guard). Verified end-to-end with a
+  preset-recall tox: TD-side writes now appear in the Resolume UI/REST.
+  KNOWN ISSUE: if the echo includes a par the host just changed (e.g. the
+  menu that triggers the preset), a stale cook can revert the host set —
+  tox-side workaround is a Select excluding that par; an in-code
+  grace-window fix is planned.
+- **Engine-version constraint discovered**: an unpinned tox folder resolved
+  to an engine build that exposes ONLY texture output links — no
+  FloatBuffer/CHOP or StringData/DAT outputs, silently. The `TouchEngine`
+  symlink next to the tox (pinning a current TD build) is REQUIRED for the
+  echo channel. Symptom: `GetLinkGroups(output)` returns a single group with
+  one texture child.
 - **Dynamic parameter updates (#28) — TD-side changes now persist**:
   `PushParametersToTouchEngine` pushes only host-modified (dirty) parameters
   instead of every parameter every frame — the blanket push was stomping

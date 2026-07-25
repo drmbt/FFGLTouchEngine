@@ -1279,6 +1279,13 @@ void FFGLTouchEnginePluginBase::linkCallback(TELinkEvent event, const char* iden
 		if (InputOpName == identifier || OutputOpName == identifier) {
 			break;
 		}
+		// NOTE (#28, verified empirically 2026-07-24): TouchEngine treats input
+		// link values as HOST-authoritative. Comp-internal writes to root custom
+		// pars emit no ValueChange and are invisible to TEInstanceLinkGet*Value,
+		// so TD-initiated changes to input parameters CANNOT be reflected here.
+		// This handler still absorbs echoes of our own pushes and covers any
+		// engine-side value corrections. TD->host state echo requires an output
+		// link (e.g. an Out CHOP with par-named channels) — see CHANGELOG.
 		std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
 		if (!isTouchEngineReady) {
 			break; // re-check under the lock: a reload may have started while we waited

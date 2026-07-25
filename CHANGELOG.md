@@ -9,15 +9,22 @@ upstream PR description. Full investigation notes live in
 ## Unreleased / branch `modernize-te`
 
 ### Added
-- **Dynamic parameter updates (#28)**: TD-initiated value changes now reach
-  the host. `PushParametersToTouchEngine` pushes only host-modified (dirty)
-  parameters instead of every parameter every frame — the blanket push was
-  stomping TD-side changes one frame after they happened — and
-  `TELinkEventValueChange` reads the changed link back into the parameter
-  maps and raises `FF_EVENT_FLAG_VALUE` so the host re-queries the slot
-  (Resolume 7.4.0+). TE-originated values are stored without dirtying, which
-  is the echo guard. Effective float ranges widen when TD pushes a value
-  outside the enumerated range.
+- **Dynamic parameter updates (#28) — TD-side changes now persist**:
+  `PushParametersToTouchEngine` pushes only host-modified (dirty) parameters
+  instead of every parameter every frame — the blanket push was stomping
+  TD-side changes one frame after they happened (verified live: a
+  Parameter-Execute preset recall inside the tox now sticks). A
+  `TELinkEventValueChange` handler reads changed links back into the
+  parameter maps and raises `FF_EVENT_FLAG_VALUE` (Resolume 7.4.0+);
+  TE-originated values are stored without dirtying (echo guard).
+  **Architectural finding (verified empirically): full TD→host reflection of
+  input parameters is impossible in TouchEngine's model** — comp-internal
+  writes to root custom pars emit no ValueChange events AND are invisible to
+  `TEInstanceLinkGet*Value` (input link values are host-authoritative; traced
+  with instrumented builds against a preset-recall tox). Reflecting TD-side
+  state into the Resolume UI therefore needs an output-link channel — e.g. a
+  tox convention of an Out CHOP with par-named channels, for which TE does
+  fire per-cook ValueChange — tracked as a future item.
 
 ### Fixed
 - **Reload segfaulted the host — root cause: `TEEventInstanceReady`

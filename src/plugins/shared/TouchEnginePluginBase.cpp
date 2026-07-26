@@ -359,6 +359,16 @@ bool FFGLTouchEnginePluginBase::LoadTEFile()
 
 	isTouchEngineReady = false;
 
+	// Time the load: TE load latency is the number most worth knowing before a
+	// set, and it is otherwise invisible. Stamped here, reported at DidLoad.
+	LoadStartTime = std::chrono::steady_clock::now();
+	LoadTimerRunning = true;
+	{
+		// Just the filename — the full path is already on the Tox File slot.
+		size_t slash = FilePath.find_last_of("/\\");
+		SetLogStatus("loading " + (slash == std::string::npos ? FilePath : FilePath.substr(slash + 1)) + "...");
+	}
+
 	// 2. Load the tox file into the TouchEngine
 	TEResult result = TEInstanceConfigure(instance, FilePath.c_str(), TETimeExternal);
 	if (result != TEResultSuccess) {
@@ -366,8 +376,11 @@ bool FFGLTouchEnginePluginBase::LoadTEFile()
 		std::string msg = std::string("FFGLTouchEngine: TEInstanceConfigure failed for '") +
 			FilePath + "' — " + (desc ? desc : "unknown error");
 		FFGLLog::LogToHost(msg.c_str());
+		LoadTimerRunning = false;
+		SetLogStatus(std::string("ERROR configure: ") + (desc ? desc : "unknown error"));
 		if (result == TEResultTouchEngineBadPath || result == TEResultTouchEngineNotFound) {
 			LogEnginePinDiagnostic(FilePath);
+			SetLogStatus("ERROR: a 'TouchEngine' file next to the tox is an unusable engine pin — remove it");
 		}
 		return false;
 	}
@@ -379,6 +392,8 @@ bool FFGLTouchEnginePluginBase::LoadTEFile()
 		std::string msg = std::string("FFGLTouchEngine: TEInstanceSetFrameRate failed — ") +
 			(desc ? desc : "unknown error");
 		FFGLLog::LogToHost(msg.c_str());
+		LoadTimerRunning = false;
+		SetLogStatus(std::string("ERROR frame rate: ") + (desc ? desc : "unknown error"));
 		return false;
 	}
 
@@ -390,6 +405,9 @@ bool FFGLTouchEnginePluginBase::LoadTEFile()
 			FilePath + "' — " + (desc ? desc : "unknown error") +
 			". The tox may have been authored in a newer TouchDesigner build than this engine.";
 		FFGLLog::LogToHost(msg.c_str());
+		LoadTimerRunning = false;
+		SetLogStatus(std::string("ERROR load: ") + (desc ? desc : "unknown error") +
+			" (tox may be from a newer TD build than this engine)");
 		return false;
 	}
 
@@ -557,6 +575,11 @@ void FFGLTouchEnginePluginBase::LoadTouchEngine() {
 			return;
 		}
 
+		// Statistics are pushed by TE on its own cadence, so this costs nothing
+		// per frame on our side. Registering unconditionally: the Log slot is
+		// the only consumer and it is cheap to keep current.
+		TEInstanceSetStatisticsCallback(instance, statisticsCallbackStatic);
+
 		std::string newestTD = FindNewestTouchDesignerInstall();
 		if (!newestTD.empty()) {
 			result = TEInstanceSetPreferredEnginePath(instance, newestTD.c_str());
@@ -694,6 +717,12 @@ FFResult FFGLTouchEnginePluginBase::SetTextParameter(unsigned int dwIndex, const
 		return FF_SUCCESS;
 	}
 
+	// The Log slot is a readout. Swallow host writes rather than letting them
+	// fall through and be mistaken for a tox parameter.
+	if (LogParamID != 0 && dwIndex == LogParamID) {
+		return FF_SUCCESS;
+	}
+
 	if (!isTouchEngineLoaded || !isTouchEngineReady) {
 		return FF_SUCCESS;
 	}
@@ -753,6 +782,12 @@ char* FFGLTouchEnginePluginBase::GetTextParameter(unsigned int dwIndex) {
 	std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
 	if (dwIndex == 0) {
 		return (char*)FilePath.c_str();
+	}
+
+	// Ahead of the loaded/ready guard on purpose: the Log slot earns its keep
+	// when a load has FAILED, which is exactly when neither flag is set.
+	if (LogParamID != 0 && dwIndex == LogParamID) {
+		return (char*)LogText.c_str();
 	}
 
 	if (!isTouchEngineLoaded || !isTouchEngineReady) {
@@ -826,12 +861,125 @@ void FFGLTouchEnginePluginBase::ConstructBaseParameters() {
 		SetParamVisibility(colorBase + i + 2, false, false);
 		SetParamVisibility(colorBase + i + 3, false, false);
 	}
+
+	// The Log slot goes AFTER every pre-allocated family, so introducing it
+	// shifts no existing slot index and breaks no saved composition or OSC map.
+	// In the UI that also puts it exactly where it is useful: the hidden slots
+	// collapse, so it renders directly beneath whatever tox parameters a loaded
+	// tox has made visible.
+	//
+	// It is the only slot that stays visible with nothing loaded — a failed
+	// load is precisely when it has something to say, and no tox parameters
+	// exist at that point.
+	LogParamID = (MaxParamsByType * 7) + OffsetParamsByType;
+	SetParamInfof(LogParamID, "Log", FF_TYPE_TEXT);
+	SetParamVisibility(LogParamID, true, false);
+	LogStatus = "idle — no tox loaded";
+	RefreshLogText();
+}
+
+// Composes the visible line from the last significant event plus whatever
+// statistics TE has most recently delivered. Callers must hold TEStateMutex.
+void FFGLTouchEnginePluginBase::RefreshLogText() {
+	std::string composed = LogStatus;
+
+	if (StatMemGPU >= 0 || StatMemCPU >= 0 || StatFPS >= 0.0 || StatCookMs >= 0.0) {
+		char buffer[128];
+		if (StatMemGPU >= 0 || StatMemCPU >= 0) {
+			snprintf(buffer, sizeof(buffer), "  |  GPU %.0f MB  CPU %.0f MB",
+				StatMemGPU >= 0 ? StatMemGPU / 1048576.0 : 0.0,
+				StatMemCPU >= 0 ? StatMemCPU / 1048576.0 : 0.0);
+			composed += buffer;
+		}
+		if (StatFPS >= 0.0) {
+			snprintf(buffer, sizeof(buffer), "  %.1f fps", StatFPS);
+			composed += buffer;
+		}
+		if (StatCookMs >= 0.0) {
+			snprintf(buffer, sizeof(buffer), "  cook %.1f ms", StatCookMs);
+			composed += buffer;
+		}
+		// Only mention drops when there are any — a permanent "0 dropped" is
+		// noise, but the moment it moves it is the most important number here.
+		if (StatFramesDropped > 0) {
+			snprintf(buffer, sizeof(buffer), "  (%lld dropped)",
+				static_cast<long long>(StatFramesDropped));
+			composed += buffer;
+		}
+	}
+
+	if (composed == LogText) {
+		return;
+	}
+	LogText = composed;
+	// Tell the host to re-query. Statistics arrive on TE's cadence (~1 Hz), and
+	// lifecycle events are rare, so this is nowhere near a per-frame raise.
+	if (LogParamID != 0) {
+		RaiseParamEvent(LogParamID, FF_EVENT_FLAG_VALUE);
+	}
+}
+
+void FFGLTouchEnginePluginBase::SetLogStatus(const std::string& status) {
+	std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
+	LogStatus = status;
+	RefreshLogText();
+}
+
+void FFGLTouchEnginePluginBase::statisticsCallbackStatic(TEInstance* instance,
+	const struct TEInstanceStatistics* statistics, void* info) {
+	static_cast<FFGLTouchEnginePluginBase*>(info)->statisticsCallback(statistics);
+}
+
+void FFGLTouchEnginePluginBase::statisticsCallback(const struct TEInstanceStatistics* statistics) {
+	if (statistics == nullptr || isBeingDestroyed) {
+		return;
+	}
+	std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
+
+	StatMemGPU = statistics->memUsedGPU;
+	StatMemCPU = statistics->memUsedCPU;
+	StatFramesDropped = statistics->framesDropped;
+
+	// frameTimeCPU is CPU time SPENT on those frames, not elapsed wall time —
+	// dividing by it yields throughput capacity (a cooked-in-1.5ms frame reads
+	// as "655 fps"), which is not the rate anyone means by fps. Actual rate has
+	// to come from wall-clock between deliveries.
+	auto now = std::chrono::steady_clock::now();
+	if (statistics->frames > 0) {
+		if (StatsLastDelivery.time_since_epoch().count() != 0) {
+			double elapsed = std::chrono::duration<double>(now - StatsLastDelivery).count();
+			if (elapsed > 0.0) {
+				StatFPS = static_cast<double>(statistics->frames) / elapsed;
+			}
+		}
+		// Cook cost per frame is the useful companion number: it says how much
+		// headroom there is, independent of how fast TE is being driven.
+		if (statistics->frameTimeCPU > 0) {
+			StatCookMs = (static_cast<double>(statistics->frameTimeCPU) / 1e6)
+				/ static_cast<double>(statistics->frames);
+		}
+	}
+	StatsLastDelivery = now;
+
+	RefreshLogText();
 }
 
 void FFGLTouchEnginePluginBase::ResetBaseParameters() {
 	for (auto& ParamID : ActiveParams) {
 		SetParamVisibility(ParamID, false, true);
 	}
+
+	// Drop the statistics with the instance they described — leaving the last
+	// memory/fps figures on screen after an unload reads as if it were still
+	// running. The status line is deliberately NOT cleared here: if it holds an
+	// error, that is the thing worth keeping visible.
+	StatMemGPU = -1;
+	StatMemCPU = -1;
+	StatFPS = -1.0;
+	StatCookMs = -1.0;
+	StatFramesDropped = -1;
+	StatsLastDelivery = {};
+	RefreshLogText();
 
 	hasVideoOutput = false;
 	ActiveParams.clear();
@@ -1524,6 +1672,8 @@ void FFGLTouchEnginePluginBase::eventCallback(TEEvent event, TEResult result, in
 				(desc ? desc : "unknown error") +
 				". Check the tox path and that the TouchEngine build is new enough for this tox.";
 			FFGLLog::LogToHost(msg.c_str());
+			LoadTimerRunning = false;
+			SetLogStatus(std::string("ERROR: instance failed to load — ") + (desc ? desc : "unknown error"));
 			break;
 		}
 		{
@@ -1541,8 +1691,21 @@ void FFGLTouchEnginePluginBase::eventCallback(TEEvent event, TEResult result, in
 			ResumeTouchEngine();
 			// Render-ready only now: comp loaded, resumed, links enumerated.
 			isTouchEngineReady = true;
+			if (LoadTimerRunning) {
+				LoadTimerRunning = false;
+				double seconds = std::chrono::duration<double>(
+					std::chrono::steady_clock::now() - LoadStartTime).count();
+				char buffer[64];
+				snprintf(buffer, sizeof(buffer), "loaded in %.2fs", seconds);
+				SetLogStatus(buffer);
+			}
+			else {
+				SetLogStatus("loaded");
+			}
 		} else {
 			FFGLLog::LogToHost("Failed to load TE graphics context");
+			LoadTimerRunning = false;
+			SetLogStatus("ERROR: failed to create the graphics context");
 		}
 		break;
 	case TEEventInstanceReady:

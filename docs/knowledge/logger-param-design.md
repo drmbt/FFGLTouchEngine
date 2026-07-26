@@ -1,5 +1,9 @@
 # Design note — a diagnostic string parameter
 
+> **Built and shipped in v3.2.0 as the `Log` slot.** The design below is what
+> was implemented, with two deviations recorded at the bottom. Verified live on
+> Windows; not yet exercised on macOS.
+
 Request: an empty string parameter the plugin writes into (severe warnings, load
 times, engine path), so problems are visible in the Resolume UI and over
 REST/OSC without tailing the Arena log.
@@ -79,3 +83,44 @@ one binary and one plugin ID.
 Load timing is worth capturing: TE load latency is the thing most worth knowing
 before a set, and it is currently invisible. Stamp at `TEInstanceConfigure` and
 report the delta at `TEEventInstanceDidLoad`.
+
+---
+
+## What was actually built (v3.2.0), and where it deviated
+
+Implemented as designed: slot placed after every pre-allocated family (so no
+existing index moves), always visible, written only from lifecycle events and
+TE's statistics callback, host re-query raised only when the composed line
+changes, host writes to the slot swallowed so they cannot be mistaken for a tox
+parameter, and statistics cleared on unload so stale memory/fps figures do not
+linger next to a stopped instance.
+
+**Deviation 1 — no ring buffer.** The design called for the last N lines. Built
+as a single status line instead: a Resolume parameter row shows one line, so a
+scrollback would not be visible anyway. The status holds the last *significant*
+event (an error, or the load result) and survives until the next one, so a
+failure stays on screen rather than being scrolled away by routine stats.
+
+**Deviation 2 — no verbosity parameter yet.** Deferred rather than dropped. The
+content is already limited to errors, the load result, and ~1 Hz statistics,
+which is about the right volume for one row. Add the parameter only if it proves
+noisy in practice.
+
+**Correction found during testing.** The first implementation derived fps from
+`frameTimeCPU / frames`. That is wrong: `frameTimeCPU` is CPU time *spent* on
+those frames, not elapsed wall time, so it yields throughput capacity — a frame
+cooked in 1.1 ms reported as "655.6 fps" while the engine was actually running
+at 59. Real rate now comes from wall-clock between statistics deliveries, and
+the CPU cost is reported separately as `cook <n> ms`, which is the more useful
+number anyway: it says how much headroom there is independent of how fast TE is
+being driven.
+
+**Observed output**, from a trivial tox on Windows:
+
+```
+loaded in 25.02s  |  GPU 90 MB  CPU 2335 MB  59.0 fps  cook 1.1 ms
+```
+
+The load time is the finding worth carrying forward — see
+[backlog.md](backlog.md) item 3. 39.3 s cold, 25.0 s warm, for a tox with
+almost nothing in it. That is engine spawn cost, not tox complexity.

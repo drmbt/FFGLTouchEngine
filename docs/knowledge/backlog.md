@@ -8,6 +8,16 @@ evidence in that session's test-results file.
 
 Status: `OPEN` · `INVESTIGATING` · `BLOCKED` · `DONE (date)`.
 
+## Context: the tour
+
+A touring show is being built on these plugins and will use them heavily.
+**macOS is the primary machine, Windows is the backup**, so anything measured or
+fixed on one platform needs confirming on the other before it can be relied on —
+the two teardown paths are known to differ (see item 3). Resource behaviour and
+load timing matter more than usual here: a set that ratchets memory upward all
+night, or that stalls for 25–40 s when a clip is first fired, is a real
+operational problem rather than a curiosity.
+
 ---
 
 ## 1. Frame rate is hardcoded to 60 fps — `OPEN` (upstream #17)
@@ -110,22 +120,58 @@ deactivated" parameter for people who would rather trade re-arm latency for
 memory; (c) bring the Windows `DeInitGL` up to parity with macOS so the
 non-engine resources at least get freed.
 
-**Open sub-question, not yet measured:** whether opening a *saved* composition
-instantiates every TE plugin (and therefore spawns every engine) eagerly at load,
-or lazily on first use. The 2026-07-25 measurements all started from clips
-created in-session, so this was never isolated. It matters a lot for
-session-open time and for peak memory. Measure by counting engines immediately
-after opening a comp with several TE clips, before touching anything.
+**Session-open behaviour — RESOLVED (Vincent, 2026-07-25, observed on Windows):**
+opening a saved composition does **not** spawn an engine for every TE instance in
+it. Engines start on **first play** — and *preview does not count*. So a large
+show file is cheap to open; cost accrues as clips are actually fired, and then
+stays (see above: only `Clear Instance` or deleting the clip gives it back).
 
-## 4. Debug/logging string parameter — `OPEN` (feature request)
+That reconciles with the table: assigning a tox to an **already-live** plugin
+instance spawns the engine immediately, but a saved comp does not instantiate
+the plugin until the clip is first played.
 
-Idea: an empty string parameter the plugin writes diagnostics into (severe
-warnings, load times), surfaced in the Resolume UI and over REST/OSC, so
-problems are visible without tailing the Arena log.
+**Practical consequence for a show:** peak memory tracks *how many distinct TE
+clips get fired over the night*, not how many exist in the file — and it only
+ever ratchets upward. For a long set, budget for the worst case of every TE clip
+having been touched at least once, or plan explicit `Clear Instance` pulses on
+material that is done.
 
-Feasible — the machinery already exists (`SetTextParameter`/`GetTextParameter`
-plus the `FF_EVENT_FLAG_VALUE` raise added for #28). Design constraints and open
-questions are in **[logger-param-design.md](logger-param-design.md)**.
+**Cold-start load time is significant.** Measured on Windows with the new `Log`
+slot: **39.3s** for the first tox load in a session, **25.0s** for a subsequent
+one (`NoiseOutOnly5Param.tox`, a trivial tox — this is engine spawn, not tox
+complexity). Pre-warming anything needed mid-set is not optional at these
+numbers. Worth re-measuring on the Mac and with realistic show toxes.
+
+### Re-run this whole test on macOS — `OPEN`
+
+The tour runs **Mac primary, PC backup**, and the numbers above are Windows-only.
+The teardown paths are known to differ: the macOS `DeInitGL` *does* free its
+Metal/IOSurface resources where the Windows one frees nothing, so the eject
+behaviour may genuinely differ rather than merely being untested.
+
+Repeat on macOS and record alongside: engine count/RSS after opening a saved
+comp; after first play; after ejecting; after `Clear Instance`; after deleting
+the clip; plus cold and warm load times. `TouchEngine` is a separate process
+there too, so `ps`/Activity Monitor gives the same measurement. Then compare the
+two platforms in one table so the backup machine's behaviour is known before it
+is needed.
+
+## 4. Debug/logging string parameter — `DONE (2026-07-25, v3.2.0)`
+
+Shipped as the `Log` slot. Design rationale in
+**[logger-param-design.md](logger-param-design.md)**; what it reports and how it
+is kept off the render thread is in the CHANGELOG entry.
+
+Remaining polish, if it proves wanted:
+
+- A verbosity parameter (off / errors / verbose). Not added yet — the current
+  content is already errors-plus-load-result-plus-stats, which is about the
+  right volume. Add it only if the line proves noisy in practice.
+- Per-instance history: it currently shows the *latest* status, not a scrollback.
+  A short ring buffer was designed but not built, because a single line fits the
+  Resolume row and a scrollback does not.
+- **Verify on macOS** — the slot is in shared code, but the statistics callback
+  and the numbers it reports have only been seen on Windows.
 
 ## 5. Smaller carried items
 

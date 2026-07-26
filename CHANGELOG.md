@@ -8,6 +8,38 @@ to the branch that carries it (`fix/stability`, `feat/slot-naming-ranges`,
 `feat/dynamic-params`) and holds the migration and tox-authoring notes. Full
 investigation notes live in [docs/knowledge/](docs/knowledge/README.md).
 
+## v3.2.0 — 2026-07-25 (branch `modernize-te`)
+
+### Added
+- **`Log` diagnostic slot.** A read-only text parameter carrying the state you
+  would otherwise have to tail the Arena log for: why a load failed, how long
+  the load took, and what the engine is costing. It reports, in one line:
+  the load result (`loaded in 25.02s`) or the error that stopped it, then
+  `GPU <n> MB · CPU <n> MB · <n> fps · cook <n> ms`, plus a dropped-frame count
+  **only when it is non-zero** (a permanent "0 dropped" is noise; the moment it
+  moves it is the most important number in the row).
+
+  Placement: **after every pre-allocated family**, so introducing it shifts no
+  existing slot index and breaks no saved composition or OSC map. Because the
+  unused slots are hidden, it renders directly beneath whatever parameters a
+  loaded tox has exposed. It is the one slot that stays visible with nothing
+  loaded — a failed load is exactly when it has something to say, and at that
+  point no tox parameters exist.
+
+  **Costs nothing per frame.** Memory and timing come from
+  `TEInstanceStatistics`, which TouchEngine *pushes* on its own cadence
+  (~1 Hz) rather than being polled, and the slot is written only from lifecycle
+  events and that callback — never from `ProcessOpenGL`. The host is asked to
+  re-query only when the composed line actually changes. The per-frame
+  `Releasing texture` line removed in v3.1.0 (702 log entries in one short
+  session) is the cautionary example this design avoids.
+
+  Note on `fps`: it is derived from wall-clock between statistics deliveries,
+  not from `frameTimeCPU`. `frameTimeCPU` is CPU time *spent*, so dividing by it
+  yields throughput capacity — a frame cooked in 1.1 ms reads as "655 fps"
+  rather than the 59 fps it is actually running at. `cook <n> ms` reports that
+  CPU cost separately, as the headroom figure it actually is.
+
 ## v3.1.0 — 2026-07-25 (branch `modernize-te`)
 
 A pass over long-standing upstream defects found by auditing the render loop

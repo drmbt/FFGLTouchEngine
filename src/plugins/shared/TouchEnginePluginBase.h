@@ -31,6 +31,7 @@
 #endif
 
 #include "FFGL/FFGLSDK.h"
+#include <chrono>
 #include <map>
 #include <mutex>
 #include <string>
@@ -104,6 +105,44 @@ protected:
 
 	virtual void eventCallback(TEEvent event, TEResult result, int64_t start_time_value, int32_t start_time_scale, int64_t end_time_value, int32_t end_time_scale);
 	virtual void linkCallback(TELinkEvent event, const char* identifier);
+	virtual void statisticsCallback(const struct TEInstanceStatistics* statistics);
+
+	// ---- Diagnostic Log slot -------------------------------------------------
+	// A read-only text slot carrying the state you would otherwise have to tail
+	// the host log for: why a load failed, how long it took, and what the engine
+	// is costing. It sits AFTER every pre-allocated family so adding it moves no
+	// existing slot index, and it is the one slot that stays visible with no tox
+	// loaded — a failed load is exactly when it is needed, and at that point no
+	// tox parameters exist.
+	//
+	// Deliberately NOT written from the render thread. The per-frame
+	// "Releasing texture" line removed in v3.1.0 produced 702 host-log entries
+	// in one short session; this slot only moves on lifecycle events and on
+	// TE's own statistics callback (roughly 1 Hz, on TE's schedule, not ours).
+	FFUInt32 LogParamID = 0;
+	// Last significant event — an error, or the load result. Survives until the
+	// next one, so a failure stays on screen.
+	std::string LogStatus;
+	// Composed on demand from LogStatus + the newest statistics.
+	std::string LogText;
+	void SetLogStatus(const std::string& status);
+	void RefreshLogText();
+
+	// Newest values from TEInstanceStatistics, or <0 when not yet delivered /
+	// unsupported by the TouchDesigner build. Guarded by TEStateMutex: TE
+	// documents that statistics may arrive on any thread.
+	int64_t StatMemGPU = -1;
+	int64_t StatMemCPU = -1;
+	double StatFPS = -1.0;
+	// Per-frame cook cost in ms. Derived from frameTimeCPU, which is CPU time
+	// SPENT rather than elapsed — so it answers "how much headroom", while
+	// StatFPS (wall-clock derived) answers "how fast is it actually running".
+	double StatCookMs = -1.0;
+	int64_t StatFramesDropped = -1;
+	std::chrono::steady_clock::time_point StatsLastDelivery{};
+	// Set when TEInstanceConfigure is issued, so DidLoad can report elapsed time.
+	std::chrono::steady_clock::time_point LoadStartTime{};
+	bool LoadTimerRunning = false;
 
 	TouchObject<TEInstance> instance;
 #ifdef _WIN32
@@ -245,4 +284,5 @@ protected:
 
 	static void eventCallbackStatic(TEInstance* instance, TEEvent event, TEResult result, int64_t start_time_value, int32_t start_time_scale, int64_t end_time_value, int32_t end_time_scale, void* info);
 	static void linkCallbackStatic(TEInstance* instance, TELinkEvent event, const char* identifier, void* info);
+	static void statisticsCallbackStatic(TEInstance* instance, const struct TEInstanceStatistics* statistics, void* info);
 };

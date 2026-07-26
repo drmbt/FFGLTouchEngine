@@ -385,6 +385,7 @@ cmake_install.cmake
 # CMake build directories
 build-mac/
 build-win/
+build-stability/
 build-baseline/
 build-modern/
 build/

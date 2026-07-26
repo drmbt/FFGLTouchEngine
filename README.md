@@ -81,7 +81,31 @@ If you are using a source make sure to set the resolution in TouchDesigner or ex
 
 **Parameters**
 
-Due to FFGL limits, you can have at most 30 of each type of parameter. If you use more it could at the moment cause undefined behavior.
+Due to FFGL limits, you can have at most 40 of each type of parameter. If you use more it could at the moment cause undefined behavior.
+
+**Windows notes**
+
+Two things that are easy to hit and hard to diagnose:
+
+- **Ship the redistributable `TouchEngine.dll`** (the one in this repo's
+  `lib/TouchEngine/`), next to the plugin DLLs. The `TouchEngine.dll` inside a
+  TouchDesigner install's `bin\` folder is an internal component, not the client
+  library — using it makes every load fail with `TEResultBadUsage`. The client
+  library's version is independent of the engine's: it hosts whichever
+  TouchDesigner is installed, and the plugin prefers the newest one.
+- **A file named `TouchEngine` next to your .tox is an engine pin.** That is
+  deliberate on macOS (a symlink to a specific TouchDesigner). If such a symlink
+  reaches Windows through git or cloud sync it arrives as a small plain text
+  file, which TouchEngine still honours but cannot use — and then *every* tox in
+  that folder fails to load. Delete it on Windows, or replace it with a real
+  junction. The plugin now names the offending file in the Resolume log when
+  this happens.
+
+**Multiple instances**
+
+Several TouchEngine clips can run at once. Each instance generates its own Spout
+sender name and derives its texture-access mutex from it; if you are running an
+older build and see two clips corrupting each other's output, that is why.
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Q5Q6YUGIA)
 

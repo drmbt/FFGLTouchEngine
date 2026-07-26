@@ -8,6 +8,62 @@ to the branch that carries it (`fix/stability`, `feat/slot-naming-ranges`,
 `feat/dynamic-params`) and holds the migration and tox-authoring notes. Full
 investigation notes live in [docs/knowledge/](docs/knowledge/README.md).
 
+## Unreleased
+
+A pass over long-standing upstream defects found by auditing the render loop
+rather than by reproducing symptoms — several had never been reported because
+they degrade slowly or only bite with more than one instance. All are
+non-breaking bug fixes and belong on `fix/stability`.
+
+### Fixed
+- **The generator rebuilt its Spout interop on every frame.** The resize test
+  compared `GetGlType(RawTextureDesc.Format)` — a GL type enum — against
+  `GLFormat`, which `FFGLTouchEngine` never assigns. It stayed `0` while
+  `GetGlType()` never returns `0`, so the branch was taken every frame and ran
+  `CleanupInterop()` + `CreateInterop()` + `CreateDX11Texture()` +
+  `InitializeGlTexture()` each time. Now compares against `DXFormat` and
+  assigns it, matching what `FFGLTouchEngineFX` already did correctly.
+- **D3D immediate-context refcount underflow, once per frame, in both plugins.**
+  `devContext` is a `ComPtr`; the explicit `devContext->Release()` dropped a
+  reference the ComPtr destructor then dropped again. `keyedMutex` had the
+  mirror-image bug: a raw pointer from `QueryInterface`, left uninitialised (so
+  the null check read garbage on failure) and leaked on every early return. It
+  is now a `ComPtr` and the `QueryInterface` result is checked.
+- **Error paths reported success.** Six sites returned `FF_FALSE` on failure,
+  but `FF_SUCCESS == 0 == FF_FALSE`, so a failed texture transfer was
+  indistinguishable from a good frame. Now `FF_FAIL`.
+- **`Unload` left the render thread running on a dead instance** (likely
+  upstream #34). It suspended and unloaded but left `isTouchEngineLoaded` /
+  `isTouchEngineReady` set, and unlike `Clear` it does not reset the instance —
+  so `ProcessOpenGL`'s guard still passed. `Unload` and `Clear` now also clear
+  `isLoadPending` / `isReloadQueued`, which could otherwise stick after an
+  unload during an in-flight load and queue every later load behind one that can
+  never complete.
+- **Two undefined-behaviour fall-throughs** (`GlToDXFromat`, `GetGlType(GLint)`)
+  returned whatever was in the return register for an unhandled format, and that
+  value went on to describe a D3D texture or a GL upload. Both `C4715` warnings
+  are now gone rather than suppressed.
+- **Multiple TouchEngine clips corrupted each other.** Spout sender names came
+  from `rand()`'s global sequence, which `FFGLTouchEngine` never seeded (every
+  process produced the same name) and `FFGLTouchEngineFX` re-seeded from
+  `time(0)` in its constructor (two hosts started in the same second matched).
+  Now seeded per-thread from `std::random_device`. Separately, the
+  texture-access mutexes were the literals `"mutex"`, `"mutex1"`, `"mutex2"` —
+  Spout derives that mutex from a *sender* name, so every instance in every
+  process shared one per role. They now pass the sender name.
+- **Per-frame log I/O**: the FX texture-release callback wrote to the host log
+  on every TE texture release, burying every other `FFGL:` line.
+
+### Added
+- **The engine pin is named when it is what refused the load.** A file-system
+  link called `TouchEngine` beside the tox is a deliberate engine pin and
+  overrides the preferred-engine path; when unusable, TE fails with
+  `TEResultTouchEngineBadPath`, whose description names neither the file nor the
+  folder. The plugin now points at the offending path, notes that every tox in
+  that folder is affected, and — when the pin is a small plain file holding
+  something path-shaped — quotes it and identifies it as a symlink that did not
+  survive the trip between machines. This case cost a live set.
+
 ## v3.0.1 — 2026-07-25 (branch `modernize-te`)
 
 **No plugin behaviour change: `git diff v3.0.0 v3.0.1 -- src/` is empty.** The

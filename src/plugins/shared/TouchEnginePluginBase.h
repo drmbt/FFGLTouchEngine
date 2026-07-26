@@ -126,13 +126,18 @@ protected:
 	// releasing too eagerly stalls a return for 25-40 s, holding on too long
 	// only costs memory already being held — so it errs towards holding on.
 	//
-	// 0 means "release as soon as rendering stops" (within one watchdog tick).
-	// That is honoured, but it is fragile: any momentary gap in rendering then
-	// costs a full reload.
+	// 0 means "as soon as this can safely be detected" — see IdleSecondsFloor,
+	// which is what actually applies. Low values are legitimate but fragile:
+	// any gap in rendering longer than the threshold costs a full reload, and
+	// a dropped-frame hitch is indistinguishable from a clip going away.
 	FFUInt32 IdleSecondsParamID = 0;
 	double IdleReleaseSeconds = 20.0;
 	static constexpr double IdleSecondsDefault = 20.0;
 	static constexpr double IdleSecondsMax = 300.0;
+	// Hard floor on the effective threshold. Below roughly one watchdog tick
+	// the test stops distinguishing "stopped" from "currently rendering" and
+	// starts killing live clips — see the watchdog for the full reasoning.
+	static constexpr double IdleSecondsFloor = 1.0;
 
 	// Stamped by ProcessOpenGL on both plugins. Atomic so the render thread
 	// never blocks on the watchdog.

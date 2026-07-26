@@ -8,6 +8,25 @@ to the branch that carries it (`fix/stability`, `feat/slot-naming-ranges`,
 `feat/dynamic-params`) and holds the migration and tox-authoring notes. Full
 investigation notes live in [docs/knowledge/](docs/knowledge/README.md).
 
+## v3.4.1 — 2026-07-26 (branch `modernize-te`)
+
+### Fixed
+- **`Idle Seconds = 0` would have killed a playing clip.** The watchdog tested
+  `idle >= IdleReleaseSeconds`, and at 60 fps a *live* clip is only ~16 ms past
+  its last frame — so with a threshold of 0 that test was true on every tick and
+  the engine was released out from under a clip that was still on screen. Worse,
+  it would not have come back: `Connect()` does not fire again for a clip that
+  is already connected, so it would have stayed black until re-triggered.
+
+  A render-gap detector fundamentally cannot express "immediately", because
+  "rendering right now" and "stopped 16 ms ago" are the same measurement. The
+  effective threshold is now floored at 1 s (`IdleSecondsFloor`), just above one
+  watchdog tick, so 0 means "as soon as this can safely be detected".
+
+  Verified both directions: a playing clip at `Idle Seconds = 0` survived 30 s
+  untouched with its engine intact, and the same clip released within 2 s of
+  being ejected.
+
 ## v3.4.0 — 2026-07-26 (branch `modernize-te`)
 
 ### Added
@@ -17,9 +36,10 @@ investigation notes live in [docs/knowledge/](docs/knowledge/README.md).
   25–40 s, too long and the memory is never reclaimed. Raise it for anything
   re-fired inside the window; lower it for material that is done once played.
 
-  `0` means "release as soon as rendering stops", honoured within one 500 ms
-  watchdog tick. It works, but it is fragile — *any* momentary gap in rendering
-  then costs a full reload.
+  `0` means "as soon as this can safely be detected" — about a second in
+  practice, see the floor in v3.4.1. Low values are legitimate but fragile:
+  any gap in rendering longer than the threshold costs a full reload, and a
+  dropped-frame hitch is indistinguishable from a clip going away.
 
   Registered as `FF_TYPE_INTEGER`, not `FF_TYPE_STANDARD`: the SDK's
   `SetParamInfo` hard-clamps a STANDARD default into `[0,1]` *before* any range

@@ -1050,9 +1050,15 @@ void FFGLTouchEnginePluginBase::StartIdleWatchdog() {
 				std::chrono::steady_clock::duration(last) };
 			double idle = std::chrono::duration<double>(
 				std::chrono::steady_clock::now() - lastRender).count();
-			// >= so an Idle Seconds of 0 means "release as soon as rendering
-			// stops", honoured within one 500 ms tick.
-			if (idle >= IdleReleaseSeconds) {
+			// A render-gap detector cannot honour a literal zero. At 60 fps a
+			// LIVE clip is only ~16 ms past its last frame, so `idle >= 0` is
+			// true on every tick and the watchdog would release a clip that is
+			// currently playing — which then stays black until it is
+			// re-triggered, because Connect() does not fire again for a clip
+			// that is already connected. Floor the effective threshold at one
+			// watchdog tick plus margin, so 0 means "as soon as this can safely
+			// be detected" rather than "immediately, including mid-playback".
+			if (idle >= std::max(IdleReleaseSeconds, IdleSecondsFloor)) {
 				ReleaseEngineForIdle();
 			}
 		}

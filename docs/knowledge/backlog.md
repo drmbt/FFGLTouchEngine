@@ -83,7 +83,31 @@ Both match upstream #12, which was closed with a "future" promise and no commit.
 4. The FX **input** path (Resolume → TD) is separately 8-bit; a displacement
    effect that displaces *Resolume* content is limited by that, not by the noise.
 
-## 3. Resource lifetime: engines are not released on eject — `OPEN`
+## 3. Resource lifetime — `MITIGATED (2026-07-26, v3.3.0)`
+
+**`Release On Idle` (on by default) now hands the engine back** ~20 s after a
+clip stops rendering, and arming the clip brings it straight back. The
+measurements below are what motivated it and still describe the behaviour with
+the toggle *off*.
+
+Design notes worth keeping, both established by instrumented builds:
+
+- **Resolume never calls FFGL `Disconnect()` on eject** — only `Connect()` on
+  arm. There is no host deactivation callback, so idleness is inferred from the
+  render loop going quiet.
+- **Reload must come from `Connect()`, never from rendering.** Previewing a clip
+  renders continuously and is frame-for-frame indistinguishable from playback,
+  so a render-driven reload made every clip selection a 25–40 s engine start and
+  put a selected-but-stopped clip into an endless release/reload loop.
+- **A clip left selected in the UI keeps preview-rendering and never goes
+  idle.** Click away for it to release. Not a bug, but surprising.
+
+Still open here: the Windows `DeInitGL` remains a no-op for the non-engine
+resources (Spout interop, D3D textures/context) where macOS frees its
+Metal/IOSurface objects. The idle release deliberately does not touch them — the
+watchdog has no GL context — so that parity gap is unchanged.
+
+### Original measurements (behaviour with the toggle off)
 
 Measured 2026-07-25 (Windows, engine 2025.33070), by counting `TouchEngine.exe`
 processes and their working set:

@@ -7,7 +7,7 @@ static CFFGLPluginInfo PluginInfo(
 	2,                             // API major version number
 	1,                             // API minor version number
 	3,                             // Plugin major version number
-	210,                           // Plugin minor version number
+	300,                           // Plugin minor version number
 	FF_EFFECT,                     // Plugin type
 	"Loads tox files from TouchDesigner",// Plugin description
 	"TouchEngine Loader made by Evan Clark"        // About
@@ -166,6 +166,12 @@ FFResult FFGLTouchEngineFX::InitGL(const FFGLViewportStruct* vp)
 
 FFResult FFGLTouchEngineFX::ProcessOpenGL(ProcessOpenGLStruct* pGL)
 {
+	// Activity stamp only — the idle watchdog needs to know frames are still
+	// arriving. Reload is NOT triggered from here: preview renders look
+	// identical to playback, so that turned every clip selection into an
+	// engine start. Connect() is the reload trigger.
+	NoteRendered();
+
 	std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
 
 	if (instance == nullptr || !isTouchEngineLoaded || !isTouchEngineReady || isTouchFrameBusy)

@@ -8,6 +8,48 @@ to the branch that carries it (`fix/stability`, `feat/slot-naming-ranges`,
 `feat/dynamic-params`) and holds the migration and tox-authoring notes. Full
 investigation notes live in [docs/knowledge/](docs/knowledge/README.md).
 
+## v3.3.0 — 2026-07-26 (branch `modernize-te`)
+
+### Added
+- **`Release On Idle` toggle, on by default.** A TouchEngine process costs
+  ~1.3–1.5 GB and was held for the life of the clip: ejecting a layer freed
+  nothing, so a timecode-driven set ratcheted memory upward all night. With this
+  on, a clip that stops rendering for 20 s hands its engine back; arming the
+  clip again brings it straight back.
+
+  It does what **Clear Instance** does, not what Unload does. Unload is the
+  shallower operation — it keeps the instance alive, which is why Reload after
+  Unload is instant — and it does not return the memory. This drops the tox
+  parameters and the engine together.
+
+  **Parameter values survive the round trip.** They are snapshotted at release
+  and re-applied (and re-pushed to TE) after the tox comes back, because
+  enumeration would otherwise reset every slot to the tox's own defaults — and
+  since the host re-*queries* rather than pushes, Resolume would adopt those
+  defaults and the composition would silently lose its tweaks.
+
+  Two findings shaped the design, both verified with an instrumented build:
+
+  - **Resolume never calls FFGL's `Disconnect()` when a clip is ejected** (only
+    `Connect()` when it is armed), so there is no host callback for
+    deactivation. Idleness has to be inferred from the render loop going quiet,
+    which is what the watchdog does.
+  - **Reload must be driven by `Connect()`, never by rendering.** Selecting a
+    clip to preview it renders continuously and is indistinguishable from
+    playback frame-by-frame, so a render-driven reload turned every clip
+    selection into a 25–40 s engine start — and left a selected-but-stopped clip
+    in an endless release/reload cycle. That was observed before the fix.
+
+  Consequence worth knowing: **a clip left selected in the UI keeps
+  preview-rendering and therefore never goes idle.** Click away for it to
+  release.
+
+### Changed
+- **A manually cleared plugin now reloads when the clip is next armed.**
+  Previously, after `Clear Instance`, neither previewing nor connecting brought
+  the tox back and `Reload` had to be pressed per plugin. Arming the clip is now
+  enough; previewing or selecting still leaves it cleared.
+
 ## v3.2.1 — 2026-07-25 (branch `modernize-te`)
 
 ### Changed

@@ -193,8 +193,17 @@ FFGLTouchEnginePluginBase::FFGLTouchEnginePluginBase()
 	LogParamID = 4;
 	SetParamInfof(LogParamID, "Log", FF_TYPE_TEXT);
 
+	// On by default: for a timecode-driven set most effects fire once for one
+	// track, and holding ~1.4 GB per clip for the rest of the night is the
+	// wrong trade. Turn it off for anything re-fired often enough that the
+	// reload cost would be felt.
+	// Name is 15 chars on purpose: FFGL's ParameterInfoStruct::Name is char[16],
+	// so "Release When Idle" arrived in the host truncated to "Release When Idl".
+	ReleaseIdleParamID = 5;
+	SetParamInfo(ReleaseIdleParamID, "Release On Idle", FF_TYPE_BOOLEAN, true);
+
 	//This is the starting point for the parameters and is equal to the number of parameters above.
-	OffsetParamsByType = 5;
+	OffsetParamsByType = 6;
 
 	MaxParamsByType = 40;
 }
@@ -203,6 +212,12 @@ FFGLTouchEnginePluginBase::~FFGLTouchEnginePluginBase()
 {
 	// Mark as destroying so event callbacks are ignored
 	isBeingDestroyed = true;
+
+	// Before anything else: the watchdog touches instance/flags/log state, all
+	// of which are about to go away. ReleaseEngineForIdle is deliberately
+	// non-virtual and GL-free, so stopping the thread here — after the derived
+	// destructor has already run — is safe.
+	StopIdleWatchdog();
 
 	if (instance != nullptr) {
 		if (isTouchEngineLoaded) {
@@ -677,8 +692,22 @@ FFResult FFGLTouchEnginePluginBase::SetFloatParameter(unsigned int dwIndex, floa
 		isTouchEngineReady = false;
 		isLoadPending = false;
 		isReloadQueued = false;
+		// A manual Clear is a full reset, not an idle release — do not let the
+		// render loop resurrect the tox behind the user's back.
+		EngineReleasedIdle = false;
 		ResetBaseParameters();
 		ClearTouchInstance();
+		SetLogStatus("cleared");
+		return FF_SUCCESS;
+	}
+
+	if (ReleaseIdleParamID != 0 && dwIndex == ReleaseIdleParamID) {
+		ReleaseWhenIdle = (value != 0.0f);
+		// Turning it on mid-set should not strand an already-idle clip holding
+		// an engine, so restart the idle clock rather than releasing instantly.
+		if (ReleaseWhenIdle) {
+			NoteRendered();
+		}
 		return FF_SUCCESS;
 	}
 
@@ -751,6 +780,12 @@ float FFGLTouchEnginePluginBase::GetFloatParameter(unsigned int dwIndex) {
 
 	if (dwIndex == 1) {
 		return 0;
+	}
+	// Ahead of the ready guard: this toggle is ours, not the tox's, and the
+	// host must read it back correctly with nothing loaded — including while
+	// the engine is released, which is exactly the state it controls.
+	if (ReleaseIdleParamID != 0 && dwIndex == ReleaseIdleParamID) {
+		return ReleaseWhenIdle ? 1.0f : 0.0f;
 	}
 	if (!isTouchEngineLoaded || !isTouchEngineReady) {
 		return 0;
@@ -877,8 +912,10 @@ void FFGLTouchEnginePluginBase::ConstructBaseParameters() {
 	// unconditionally, unlike every family above: a failed load is precisely
 	// when it has something to say, and no tox parameters exist at that point.
 	SetParamVisibility(LogParamID, true, false);
+	SetParamVisibility(ReleaseIdleParamID, true, false);
 	LogStatus = "idle — no tox loaded";
 	RefreshLogText();
+	StartIdleWatchdog();
 }
 
 // Composes the visible line from the last significant event plus whatever
@@ -920,6 +957,132 @@ void FFGLTouchEnginePluginBase::RefreshLogText() {
 	if (LogParamID != 0) {
 		RaiseParamEvent(LogParamID, FF_EVENT_FLAG_VALUE);
 	}
+}
+
+unsigned int FFGLTouchEnginePluginBase::Connect() {
+	// Arming a clip is the ONLY thing that brings a released engine back.
+	//
+	// Rendering deliberately does not: selecting a clip to preview it renders
+	// continuously and is indistinguishable from playback at the frame level,
+	// so a render-driven reload turned every preview into a 25-40s engine
+	// start — and, for a clip left selected but not playing, into an endless
+	// release/reload cycle. Observed exactly that.
+	//
+	// This also covers a manually Cleared plugin, not just an idle release:
+	// firing the clip reloads it, while merely previewing or selecting leaves
+	// it cleared.
+	NoteRendered();
+	ReloadIfEngineAbsent();
+	return FF_SUCCESS;
+}
+
+unsigned int FFGLTouchEnginePluginBase::Disconnect() {
+	// Resolume does NOT call this on eject (verified with an instrumented
+	// build) — the idle watchdog is what actually detects deactivation. Kept
+	// as a correct implementation for hosts that do call it.
+	if (ReleaseWhenIdle) {
+		ReleaseEngineForIdle();
+	}
+	return FF_SUCCESS;
+}
+
+void FFGLTouchEnginePluginBase::NoteRendered() {
+	LastRenderTick.store(
+		std::chrono::steady_clock::now().time_since_epoch().count(),
+		std::memory_order_relaxed);
+}
+
+void FFGLTouchEnginePluginBase::StartIdleWatchdog() {
+	if (WatchdogThread.joinable()) {
+		return;
+	}
+	WatchdogStop.store(false, std::memory_order_relaxed);
+	WatchdogThread = std::thread([this]() {
+		while (!WatchdogStop.load(std::memory_order_relaxed)) {
+			// Short sleep so shutdown is responsive; the idle test itself is
+			// against IdleReleaseSeconds, not this interval.
+			std::this_thread::sleep_for(std::chrono::milliseconds(500));
+			if (WatchdogStop.load(std::memory_order_relaxed)) {
+				return;
+			}
+			if (!ReleaseWhenIdle) {
+				continue;
+			}
+			long long last = LastRenderTick.load(std::memory_order_relaxed);
+			if (last == 0) {
+				// Never rendered — nothing has been armed yet, so there is
+				// nothing to reclaim and no idle period to measure.
+				continue;
+			}
+			std::chrono::steady_clock::time_point lastRender{
+				std::chrono::steady_clock::duration(last) };
+			double idle = std::chrono::duration<double>(
+				std::chrono::steady_clock::now() - lastRender).count();
+			if (idle >= IdleReleaseSeconds) {
+				ReleaseEngineForIdle();
+			}
+		}
+	});
+}
+
+void FFGLTouchEnginePluginBase::StopIdleWatchdog() {
+	WatchdogStop.store(true, std::memory_order_relaxed);
+	if (WatchdogThread.joinable()) {
+		WatchdogThread.join();
+	}
+}
+
+void FFGLTouchEnginePluginBase::ReleaseEngineForIdle() {
+	std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
+	if (instance == nullptr || EngineReleasedIdle) {
+		return;
+	}
+
+	// Deliberately narrow: suspend, unload, drop the instance. That is what
+	// ends the engine process and returns the memory. The Spout interop, the
+	// D3D/Metal context and the GL textures are left alone — the watchdog has
+	// no GL context to tear them down on, and they are small compared to an
+	// engine. Parameter maps are kept too, so values survive the round trip and
+	// are re-pushed when the tox comes back.
+	// Snapshot the values so the reload can put them back — enumeration will
+	// otherwise reset every slot to the tox's defaults.
+	RetainedFloat = ParameterMapFloat;
+	RetainedInt = ParameterMapInt;
+	RetainedBool = ParameterMapBool;
+	RetainedString = ParameterMapString;
+	RetainedValuesValid = true;
+
+	if (isTouchEngineLoaded) {
+		TEInstanceSuspend(instance);
+		TEInstanceUnload(instance);
+	}
+	instance.reset();
+
+	isTouchEngineLoaded = false;
+	isTouchEngineReady = false;
+	isGraphicsContextLoaded = false;
+	isLoadPending = false;
+	isReloadQueued = false;
+	EngineReleasedIdle = true;
+
+	// Match what Clear Instance does: drop the tox parameters as well as the
+	// engine. Unload is the shallower operation — it keeps the instance alive,
+	// which is why Reload after Unload is instant — and it is not what this is
+	// for. Values were snapshotted above and go back on when the tox returns.
+	ResetBaseParameters();
+	SetLogStatus("engine released after idle — fires again on next trigger");
+}
+
+void FFGLTouchEnginePluginBase::ReloadIfEngineAbsent() {
+	std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
+	if (instance != nullptr || FilePath.empty() || isLoadPending) {
+		return;
+	}
+	EngineReleasedIdle = false;
+	// Async from here: LoadTEFile only configures, and the graphics context is
+	// rebuilt in the DidLoad callback exactly as on a first load.
+	LoadTouchEngine();
+	LoadTEFile();
 }
 
 void FFGLTouchEnginePluginBase::SetLogStatus(const std::string& status) {
@@ -1117,6 +1280,43 @@ void FFGLTouchEnginePluginBase::GetAllParameters() {
 			}
 		}
 
+	}
+
+	// An idle release is meant to be invisible apart from the reload delay, but
+	// enumeration has just overwritten every slot with the tox's own defaults.
+	// Put the pre-release values back and mark them dirty so the normal
+	// dirty-only push sends them to TE, otherwise a clip that idled out and
+	// came back would silently lose every parameter tweak — and because the
+	// host re-QUERIES on the sweep below rather than pushing, Resolume would
+	// adopt the defaults too, losing them from the composition as well.
+	if (RetainedValuesValid) {
+		RetainedValuesValid = false;
+		for (auto& ParamID : ActiveParams) {
+			bool restored = false;
+			auto f = RetainedFloat.find(ParamID);
+			if (f != RetainedFloat.end() && ParameterMapFloat.count(ParamID)) {
+				ParameterMapFloat[ParamID] = f->second; restored = true;
+			}
+			auto i = RetainedInt.find(ParamID);
+			if (i != RetainedInt.end() && ParameterMapInt.count(ParamID)) {
+				ParameterMapInt[ParamID] = i->second; restored = true;
+			}
+			auto b = RetainedBool.find(ParamID);
+			if (b != RetainedBool.end() && ParameterMapBool.count(ParamID)) {
+				ParameterMapBool[ParamID] = b->second; restored = true;
+			}
+			auto s = RetainedString.find(ParamID);
+			if (s != RetainedString.end() && ParameterMapString.count(ParamID)) {
+				ParameterMapString[ParamID] = s->second; restored = true;
+			}
+			if (restored) {
+				DirtyParams.insert(ParamID);
+			}
+		}
+		RetainedFloat.clear();
+		RetainedInt.clear();
+		RetainedBool.clear();
+		RetainedString.clear();
 	}
 
 	// Re-raise value events now that the walk is complete. Enumeration runs on

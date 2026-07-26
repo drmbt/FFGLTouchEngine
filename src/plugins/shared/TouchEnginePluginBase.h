@@ -31,10 +31,12 @@
 #endif
 
 #include "FFGL/FFGLSDK.h"
+#include <atomic>
 #include <chrono>
 #include <map>
 #include <mutex>
 #include <string>
+#include <thread>
 #include "TouchEngine/TouchObject.h"
 
 #ifdef _WIN32
@@ -102,6 +104,58 @@ protected:
 	void CreateParametersFromGroup(const TouchObject<TELinkInfo>& linkInfo);
 
 	virtual void HandleOperatorLink(const TouchObject<TELinkInfo>& linkInfo) = 0;
+
+	// ---- Idle engine release -------------------------------------------------
+	// A TouchEngine process costs ~1.3-1.5 GB and, left alone, is held for the
+	// lifetime of the clip: measured on Windows, ejecting a layer frees nothing,
+	// and only Clear Instance or deleting the clip gives it back. For a
+	// timecode-driven set where each effect fires for one track, that ratchets
+	// memory upward all night.
+	//
+	// There is no host callback to hang this on. Resolume fires FFGL's Connect()
+	// when a clip is armed but does NOT fire Disconnect() when it is ejected
+	// (verified with an instrumented build), so deactivation has to be inferred
+	// from the render loop going quiet.
+	FFUInt32 ReleaseIdleParamID = 0;
+	bool ReleaseWhenIdle = true;
+	// Long enough that a transition, a beat-synced retrigger or a brief cut away
+	// does not pay the reload cost. Reloading is expensive (25-40 s cold), so
+	// this errs towards holding on.
+	static constexpr double IdleReleaseSeconds = 20.0;
+
+	// Stamped by ProcessOpenGL on both plugins. Atomic so the render thread
+	// never blocks on the watchdog.
+	std::atomic<long long> LastRenderTick{ 0 };
+	std::atomic<bool> WatchdogStop{ false };
+	std::thread WatchdogThread;
+	// True once the watchdog has handed the engine back, so the next render
+	// knows to reload rather than sitting on an empty instance.
+	bool EngineReleasedIdle = false;
+
+	// Parameter values captured at idle release and re-applied after the tox
+	// comes back, so the round trip does not reset the clip to tox defaults.
+	std::unordered_map<FFUInt32, double> RetainedFloat;
+	std::unordered_map<FFUInt32, int32_t> RetainedInt;
+	std::unordered_map<FFUInt32, bool> RetainedBool;
+	std::unordered_map<FFUInt32, std::string> RetainedString;
+	bool RetainedValuesValid = false;
+
+	void NoteRendered();
+	void StartIdleWatchdog();
+	void StopIdleWatchdog();
+	// Releases ONLY the TE instance (and with it the engine process). Does not
+	// touch GL or the Spout interop: the watchdog has no GL context, and those
+	// resources are cheap to keep. Non-virtual and self-contained so it is safe
+	// to call while the object is being torn down.
+	void ReleaseEngineForIdle();
+	// Brings the tox back when the clip is armed. Covers both an idle release
+	// and a manual Clear Instance — in either case the instance is gone and a
+	// trigger should restore it.
+	void ReloadIfEngineAbsent();
+
+	// FFGL activation hooks. Resolume drives Connect() when a clip is armed.
+	unsigned int Connect() override;
+	unsigned int Disconnect() override;
 
 	virtual void eventCallback(TEEvent event, TEResult result, int64_t start_time_value, int32_t start_time_scale, int64_t end_time_value, int32_t end_time_scale);
 	virtual void linkCallback(TELinkEvent event, const char* identifier);

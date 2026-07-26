@@ -35,6 +35,11 @@ someday-and-on-our-terms exercise, not a running obligation.
   the "Known issues" list current.
 - Investigation notes, test results, and session handoffs go in
   `docs/knowledge/` (see its README for the index).
+- **`docs/knowledge/backlog.md` is the durable TODO list** — the one file that
+  outlives a session. Add long-term findings and follow-ups there and keep its
+  statuses current. Dated `test-results-<date>.md` files are immutable snapshots
+  of one day's evidence; never edit an old one, write a new one and update the
+  backlog.
 - Build dirs (`build-baseline/`, `build-modern/`), `tests/` (contains
   machine-specific `TouchEngine` symlinks that pin the engine build), and
   `Example/*.tox` test probes stay untracked.

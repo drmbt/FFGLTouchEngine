@@ -3,6 +3,14 @@
 Research snapshot from 2026-07-23 (repo master @ 494bd03). Companion skill:
 `.claude/skills/ffgl-tox-effect` (authoring toxes for this wrapper).
 
+- **[backlog.md](backlog.md)** — ⭐ **the durable cross-session TODO list.** Start
+  here. Everything that outlives a session lives in it: hardcoded 60fps, the
+  high-bit-depth/displacement investigation, engine resource lifetime, the
+  logger parameter, and the upstream issues worth re-checking. Dated
+  `test-results-*.md` files are immutable snapshots; this one gets edited.
+- **[logger-param-design.md](logger-param-design.md)** — design note for the
+  diagnostic string parameter (feasibility, the per-frame trap, why one build
+  rather than a debug variant).
 - **[issues-audit.md](issues-audit.md)** — all 28 issues + 6 PRs audited: what's
   genuinely fixed, what was hand-waved closed, re-verification priority list,
   TD/Resolume version matrix from issue threads.

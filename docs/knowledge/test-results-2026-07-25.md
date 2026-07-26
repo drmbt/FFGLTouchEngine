@@ -133,3 +133,64 @@ Windows pin would need a real junction/`.lnk`, not the checked-out placeholder.
 - The three feature branches were **not** rebuilt individually on Windows; only
   `modernize-te`. The two fixes above are attributed to their branches in prose
   but have not been cherry-picked onto them.
+
+---
+
+# Second session, same day — defect pass + verification (v3.1.0)
+
+After the parity pass above, an audit of the render loop turned up seven
+long-standing upstream defects. All were fixed and then verified live on the
+same rig (Arena 7.27.1, TouchDesigner 2025.33070 engine, x64 Release).
+
+## What the audit found that symptom-chasing had not
+
+Three of these ran **once per frame**, which is why they had never been
+reported as bugs — they degrade slowly rather than failing outright:
+
+- The **generator rebuilt its entire Spout interop every frame**. The resize
+  test compared `GetGlType(RawTextureDesc.Format)` (a GL *type* enum) against
+  `GLFormat`, which `FFGLTouchEngine` never assigns. It stayed `0`,
+  `GetGlType()` never returns `0`, so `CleanupInterop()` + `CreateInterop()` +
+  `CreateDX11Texture()` + `InitializeGlTexture()` ran on every frame.
+  `FFGLTouchEngineFX` had the correct `DXFormat` comparison all along — the two
+  plugins had simply drifted.
+- **D3D immediate-context refcount underflow** in both plugins: an explicit
+  `devContext->Release()` on a `ComPtr` that then released again in its
+  destructor.
+- `keyedMutex` was a **raw pointer declared uninitialised** — the null check
+  read garbage whenever `QueryInterface` failed — and leaked on every early
+  return.
+
+Plus: six error paths returned `FF_FALSE`, which *is* `FF_SUCCESS` (both `0`);
+two functions fell off their switches with no return (real UB, and the
+compiler had been saying so via `C4715`); `Unload` left both ready flags set on
+a still-live instance; and Spout sender names came from an unseeded/re-seeded
+global `rand()` while the texture-access mutexes were the shared literals
+`"mutex"` / `"mutex1"` / `"mutex2"`.
+
+**Audit correction:** `codebase-notes.md` defect 12 claims the charset indexing
+in `GenerateRandomString` "drops 'z'". That is wrong — the set is 62 characters
+plus NUL, so `sizeof - 1` is 62 and picking in `[0,61]` covers all of them.
+Only the *seeding* was broken.
+
+## Verification results
+
+| Check | Result |
+|---|---|
+| **Multi-instance** (never tested before) | **PASS** — three TouchEngine sources playing at once, each with a different tox, each rendering its own content. Setting `Text1` on the layer-3 instance to `LAYER-3-ONLY` changed **only** that layer; layer 5 kept rendering `Test`. No texture or parameter bleed |
+| Reload gauntlet, 3× on a playing instance, with two others live | **PASS** — host PID unchanged, full re-enumeration each time |
+| `Unload` | **PASS** — output stops cleanly (black), other instances unaffected, and the `TELinkEventRemoved` safety net logs "pausing output until parameters are re-enumerated" as designed |
+| Engine-pin diagnostic, in-host | **PASS** — fires verbatim on the real G: drive folder, naming the file, quoting `/Applications/TouchDesigner.33070.app`, and warning that every tox in the folder is affected |
+| Log hygiene | **PASS** — `Releasing texture` went from 702 occurrences to **0**; `Failed to set double value`, `skipping parameter`, and all interop errors at **0** |
+| Build | Clean; both `C4715` warnings gone (fixed, not suppressed) |
+
+## Still not covered
+
+- **Long soak.** Everything above is minutes, not hours. The refcount and
+  interop changes are exactly the kind that show up over a full set.
+- Multi-instance was tested with three *sources*; a mixed source+FX+FX load was
+  not exercised.
+- Issue #12 (32-bit tox) and #17 (hardcoded 60 fps) remain untouched. #17 is
+  more pressing on Windows, where 144Hz displays are common.
+- macOS has not been rebuilt since this pass. The changes are shared-code and
+  Windows-guarded, but that is inference, not verification.

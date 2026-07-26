@@ -8,12 +8,23 @@ to the branch that carries it (`fix/stability`, `feat/slot-naming-ranges`,
 `feat/dynamic-params`) and holds the migration and tox-authoring notes. Full
 investigation notes live in [docs/knowledge/](docs/knowledge/README.md).
 
-## Unreleased
+## v3.1.0 — 2026-07-25 (branch `modernize-te`)
 
 A pass over long-standing upstream defects found by auditing the render loop
 rather than by reproducing symptoms — several had never been reported because
-they degrade slowly or only bite with more than one instance. All are
-non-breaking bug fixes and belong on `fix/stability`.
+they degrade slowly or only bite with more than one instance. Nothing here is
+breaking: saved compositions and OSC/MIDI maps are unaffected, so this is a
+minor bump. `PluginInfo` moves to `3.100` (FFGL exposes major.minor only).
+
+**Verified live on Windows** (Arena 7.27.1, TouchDesigner 2025.33070 engine):
+three simultaneous TouchEngine instances each rendering their own tox with
+independent parameters (setting one instance's text left the others untouched —
+the case that previously collided); 3× Reload on a playing instance with the
+host surviving and re-enumerating each time; `Unload` cleanly stopping output
+instead of leaving the render thread on a dead instance; the engine-pin
+diagnostic firing verbatim on a real poisoned folder. Zero occurrences of
+`Failed to set double value`, `skipping parameter`, `Releasing texture`, or any
+interop error across the whole session log.
 
 ### Fixed
 - **The generator rebuilt its Spout interop on every frame.** The resize test

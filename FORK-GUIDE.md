@@ -38,14 +38,37 @@ no working notes. That keeps each PR diff about the code; the PR description
 carries the prose.
 
 **The one deliberate src difference: the fork version.** `modernize-te` sets the
-FFGL `PluginInfo` major version to `3` (fork release v3.0.0); the PR branches
-keep upstream's `1`, since the fork's version numbering is not upstream's to
-inherit. That is the *entire* expected `src/` delta — anything else appearing in
-`git diff feat/dynamic-params modernize-te -- src/` means the stack has drifted
-and needs re-splitting.
+FFGL `PluginInfo` major version to `3`; the PR branches keep upstream's `1`,
+since the fork's version numbering is not upstream's to inherit.
 
-Each branch builds and links on its own (`cmake --build build-modern --config
-Release`, macOS/arm64), so the maintainer can merge PR #1 and stop there.
+### The PR branches are stale by design
+
+> **Only `modernize-te` is maintained.** The three feature branches are a
+> convenience for a *possible future* upstream PR, not a parallel copy of the
+> project. They are **not** kept in sync as work happens, and they should not be:
+> rebasing the stack after every fix costs real effort every session and buys
+> nothing until a PR is actually being opened.
+>
+> Expect them to lag `modernize-te`, possibly by a lot. **Nothing on them is
+> precious** — they can be deleted and regenerated at any time. `modernize-te` is
+> the source of truth and the only branch anyone should build or release from.
+
+**When a PR is actually on the table**, re-split fresh from `modernize-te`:
+
+1. Reset each branch and cherry-pick from `modernize-te` into the right layer —
+   crash/render/enumeration fixes onto `fix/stability`, anything that moves slot
+   names or wire semantics onto `feat/slot-naming-ranges`, the #28 feature
+   surface onto `feat/dynamic-params`.
+2. Build each branch standalone (they must each compile on their own, so the
+   maintainer can take PR #1 and stop).
+3. Check the acceptance invariant: `git diff feat/dynamic-params modernize-te --
+   src/` should be **exactly the two `PluginInfo` major-version lines** and
+   nothing else. Anything more means the split is incomplete.
+
+This fork has diverged from the maintainer's direction deliberately — breaking
+changes, different priorities — so upstreaming is a someday-and-on-our-terms
+exercise. Treat the split as PR *preparation*, done once when needed, not as an
+ongoing obligation.
 
 ## Change map
 

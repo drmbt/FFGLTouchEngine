@@ -1,8 +1,30 @@
 # FFGLTouchEngine — fork working notes
 
 Fork of medcelerate/FFGLTouchEngine (FFGL plugins hosting TouchEngine in
-Resolume). Remote `fork` = drmbt/FFGLTouchEngine (ours), `origin` = upstream.
-Branch `modernize-te` carries all fork work; `master` tracks upstream v2.0.4.
+Resolume). Remote `origin` = drmbt/FFGLTouchEngine (ours), `upstream` =
+medcelerate. Branch `modernize-te` carries all fork work; `master` tracks
+upstream v2.0.4.
+
+## Branch policy — only `modernize-te` is maintained
+
+**Work on `modernize-te`, build from `modernize-te`, release from
+`modernize-te`.** It is the only branch that has to be correct.
+
+`fix/stability`, `feat/slot-naming-ranges` and `feat/dynamic-params` exist
+solely to make a future upstream PR easy to cherry-pick from. They are
+**stale by design and deliberately not maintained** — do not rebase them,
+re-split them, or forward-port fixes onto them as part of normal work. That
+costs real effort every session and buys nothing until a PR actually happens.
+
+**Before opening an upstream PR** (and only then): revisit those branches,
+re-split them fresh from `modernize-te`, verify each builds standalone, and
+check the acceptance invariant (`git diff feat/dynamic-params modernize-te --
+src/` should be only the `PluginInfo` version lines). Treat whatever is on
+them now as scratch — nothing on them is precious.
+
+This fork has diverged from the maintainer's direction on purpose, with
+breaking changes and different priorities, so the PR split is a
+someday-and-on-our-terms exercise, not a running obligation.
 
 ## Rules
 
@@ -33,8 +55,13 @@ Branch `modernize-te` carries all fork work; `master` tracks upstream v2.0.4.
   (plugin lines prefixed `FFGL:`).
 - Test toxes: `tests/engine-<build>/` — the `TouchEngine` symlink next to a
   loaded tox pins which TouchDesigner build hosts the engine.
-- **Do not pulse Reload on a playing FX clip** until the parameter/link mutex
-  lands — it races the render thread and can segfault Arena.
+- Reload on a playing FX clip is safe now (the TE lifecycle mutex and the
+  `InstanceReady` fix landed); the 3× gauntlet is part of the standard check
+  on both platforms.
+- Windows: `TouchDesigner\bin\TouchEngine.dll` is NOT the redistributable —
+  ship `lib/TouchEngine/TouchEngine.dll` or every load fails `BadUsage`. And a
+  macOS `TouchEngine` symlink pin that reaches Windows arrives as a plain text
+  file that poisons every tox in its folder; the plugin now names it in the log.
 - FFGL constraint worth remembering: slot names are static (host reads them
   at scan time, uses them for OSC/REST addresses and event-button captions);
   only display names can change at runtime.

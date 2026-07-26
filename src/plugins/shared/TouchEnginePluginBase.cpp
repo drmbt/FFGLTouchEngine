@@ -181,9 +181,20 @@ FFGLTouchEnginePluginBase::FFGLTouchEnginePluginBase()
 	SetParamInfof(1, "Reload", FF_TYPE_EVENT);
 	SetParamInfof(2, "Unload", FF_TYPE_EVENT);
 	SetParamInfof(3, "Clear Instance", FF_TYPE_EVENT);
+	// Sits with the other always-present controls, directly beneath Clear
+	// Instance and above every tox-driven slot, so the diagnostics read as part
+	// of the plugin's own header rather than trailing the comp's parameters.
+	//
+	// Safe to place here even though it shifts every pre-allocated family up by
+	// one index: Resolume serialises FFGL parameters BY NAME
+	// (<Param name="Float1" .../> in the .avc), and OSC/REST addresses are
+	// likewise name-derived, so no saved composition or map depends on these
+	// indices. Verified against a real saved composition.
+	LogParamID = 4;
+	SetParamInfof(LogParamID, "Log", FF_TYPE_TEXT);
 
 	//This is the starting point for the parameters and is equal to the number of parameters above.
-	OffsetParamsByType = 4;
+	OffsetParamsByType = 5;
 
 	MaxParamsByType = 40;
 }
@@ -862,17 +873,9 @@ void FFGLTouchEnginePluginBase::ConstructBaseParameters() {
 		SetParamVisibility(colorBase + i + 3, false, false);
 	}
 
-	// The Log slot goes AFTER every pre-allocated family, so introducing it
-	// shifts no existing slot index and breaks no saved composition or OSC map.
-	// In the UI that also puts it exactly where it is useful: the hidden slots
-	// collapse, so it renders directly beneath whatever tox parameters a loaded
-	// tox has made visible.
-	//
-	// It is the only slot that stays visible with nothing loaded — a failed
-	// load is precisely when it has something to say, and no tox parameters
-	// exist at that point.
-	LogParamID = (MaxParamsByType * 7) + OffsetParamsByType;
-	SetParamInfof(LogParamID, "Log", FF_TYPE_TEXT);
+	// Registered in the constructor at index 4 (see there). Kept visible
+	// unconditionally, unlike every family above: a failed load is precisely
+	// when it has something to say, and no tox parameters exist at that point.
 	SetParamVisibility(LogParamID, true, false);
 	LogStatus = "idle — no tox loaded";
 	RefreshLogText();

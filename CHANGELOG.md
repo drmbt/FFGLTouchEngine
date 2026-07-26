@@ -8,6 +8,25 @@ to the branch that carries it (`fix/stability`, `feat/slot-naming-ranges`,
 `feat/dynamic-params`) and holds the migration and tox-authoring notes. Full
 investigation notes live in [docs/knowledge/](docs/knowledge/README.md).
 
+## v3.2.1 — 2026-07-25 (branch `modernize-te`)
+
+### Changed
+- **`Log` moved to the top, directly beneath `Clear Instance`** and above every
+  tox-driven parameter, rather than trailing them. It now reads as part of the
+  plugin's own header, which is where diagnostics belong.
+
+  This shifts every pre-allocated family up by one index (`OffsetParamsByType`
+  4 → 5). **That is not a breaking change**, and the assumption was verified
+  rather than trusted: Resolume serialises FFGL parameters *by name* —
+  `<Param name="Float1" .../>` in the `.avc` — and OSC/REST addresses are
+  likewise name-derived. Confirmed end-to-end by reopening a composition saved
+  under the old layout: `Float1` (0.565), `Int1` (239) and `Text1` ("Test") all
+  restored onto the correct slots despite all 280 indices moving.
+
+  The one thing this *would* affect is anything addressing the plugin by raw
+  FFGL parameter index rather than through a host — nothing in normal Resolume,
+  OSC or REST use does.
+
 ## v3.2.0 — 2026-07-25 (branch `modernize-te`)
 
 ### Added

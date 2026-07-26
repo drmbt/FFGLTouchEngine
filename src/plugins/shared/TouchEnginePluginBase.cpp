@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <random>
 #include <vector>
 
@@ -32,6 +34,57 @@ static void LogLinkSkip(const char* identifier, const char* reason) {
 	std::string msg = std::string("FFGLTouchEngine: skipping parameter '") +
 		(identifier ? identifier : "?") + "' — " + reason;
 	FFGLLog::LogToHost(msg.c_str());
+}
+
+// TouchEngine treats a file-system link named "TouchEngine" beside the tox as a
+// deliberate engine pin, and that pin overrides the preferred-engine path. When
+// it cannot be used TE refuses the load with TEResultTouchEngineBadPath, whose
+// description names neither the file nor the directory — so the failure reads
+// as "this tox is broken" when in fact every tox in that folder will fail.
+//
+// The case that actually bites: a macOS symlink pin travelling to Windows
+// through git or cloud sync, where it materialises as a small plain file
+// holding the POSIX target path. Point straight at it.
+static void LogEnginePinDiagnostic(const std::string& toxPath) {
+	namespace fs = std::filesystem;
+	std::error_code ec;
+
+	fs::path directory = fs::path(toxPath).parent_path();
+	if (directory.empty()) {
+		return;
+	}
+
+	for (const char* pinName : { "TouchEngine", "TouchEngine.lnk" }) {
+		fs::path pin = directory / pinName;
+		if (!fs::exists(pin, ec)) {
+			continue;
+		}
+
+		std::string msg = std::string("FFGLTouchEngine: '") + pin.string() +
+			"' is being treated as an engine pin and could not be used — this is what "
+			"failed the load, not the tox. Every tox in that folder will fail while it "
+			"is there.";
+
+		// A tiny regular file whose contents look like a path is the synced-symlink
+		// case; quoting it makes the diagnosis unambiguous.
+		if (fs::is_regular_file(pin, ec)) {
+			auto size = fs::file_size(pin, ec);
+			if (!ec && size > 0 && size < 512) {
+				std::ifstream in(pin, std::ios::binary);
+				std::string contents((std::istreambuf_iterator<char>(in)),
+					std::istreambuf_iterator<char>());
+				if (contents.find('/') != std::string::npos ||
+					contents.find('\\') != std::string::npos) {
+					msg += " It is a plain file containing '" + contents +
+						"', i.e. a symlink that did not survive the trip to this machine. "
+						"Remove it, or replace it with a real link, to load from this folder.";
+				}
+			}
+		}
+
+		FFGLLog::LogToHost(msg.c_str());
+		return;
+	}
 }
 
 // Spout sender names must be unique per plugin instance AND across processes:
@@ -313,6 +366,9 @@ bool FFGLTouchEnginePluginBase::LoadTEFile()
 		std::string msg = std::string("FFGLTouchEngine: TEInstanceConfigure failed for '") +
 			FilePath + "' — " + (desc ? desc : "unknown error");
 		FFGLLog::LogToHost(msg.c_str());
+		if (result == TEResultTouchEngineBadPath || result == TEResultTouchEngineNotFound) {
+			LogEnginePinDiagnostic(FilePath);
+		}
 		return false;
 	}
 

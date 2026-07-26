@@ -7,7 +7,7 @@ static CFFGLPluginInfo PluginInfo(
 	2,                             // API major version number
 	1,                             // API minor version number
 	3,                             // Plugin major version number
-	300,                           // Plugin minor version number
+	400,                           // Plugin minor version number
 	FF_EFFECT,                     // Plugin type
 	"Loads tox files from TouchDesigner",// Plugin description
 	"TouchEngine Loader made by Evan Clark"        // About

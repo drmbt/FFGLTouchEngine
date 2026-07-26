@@ -202,8 +202,22 @@ FFGLTouchEnginePluginBase::FFGLTouchEnginePluginBase()
 	ReleaseIdleParamID = 5;
 	SetParamInfo(ReleaseIdleParamID, "Release On Idle", FF_TYPE_BOOLEAN, true);
 
+	// Per-clip, because one global value cannot fit both a workhorse effect
+	// that gets cut back to and a one-shot fired once for a track. Seconds of
+	// no rendering before the engine is handed back.
+	IdleSecondsParamID = 6;
+	// FF_TYPE_INTEGER, not FF_TYPE_STANDARD: SetParamInfo hard-clamps a
+	// STANDARD default into [0,1] before any range is declared, so a default of
+	// 20 silently became 1 and every clip released after one second. Integer
+	// defaults are passed through untouched — and whole seconds is the right
+	// granularity anyway.
+	SetParamInfo(IdleSecondsParamID, "Idle Seconds", FF_TYPE_INTEGER,
+		static_cast<float>(IdleSecondsDefault));
+	SetParamRange(IdleSecondsParamID, 0.0f, static_cast<float>(IdleSecondsMax));
+	IdleReleaseSeconds = IdleSecondsDefault;
+
 	//This is the starting point for the parameters and is equal to the number of parameters above.
-	OffsetParamsByType = 6;
+	OffsetParamsByType = 7;
 
 	MaxParamsByType = 40;
 }
@@ -711,6 +725,20 @@ FFResult FFGLTouchEnginePluginBase::SetFloatParameter(unsigned int dwIndex, floa
 		return FF_SUCCESS;
 	}
 
+	if (IdleSecondsParamID != 0 && dwIndex == IdleSecondsParamID) {
+		// The host sends the real value for a slot with a declared range.
+		// Clamp anyway — a stray OSC message should not disable the feature or
+		// park an engine for an hour.
+		double seconds = static_cast<double>(value);
+		if (seconds < 0.0) seconds = 0.0;
+		if (seconds > IdleSecondsMax) seconds = IdleSecondsMax;
+		IdleReleaseSeconds = seconds;
+		// Shortening it should not retroactively release a clip that has been
+		// sitting idle under the old, longer value.
+		NoteRendered();
+		return FF_SUCCESS;
+	}
+
 	if (!isTouchEngineLoaded || !isTouchEngineReady) {
 		return FF_SUCCESS;
 	}
@@ -786,6 +814,9 @@ float FFGLTouchEnginePluginBase::GetFloatParameter(unsigned int dwIndex) {
 	// the engine is released, which is exactly the state it controls.
 	if (ReleaseIdleParamID != 0 && dwIndex == ReleaseIdleParamID) {
 		return ReleaseWhenIdle ? 1.0f : 0.0f;
+	}
+	if (IdleSecondsParamID != 0 && dwIndex == IdleSecondsParamID) {
+		return static_cast<float>(IdleReleaseSeconds);
 	}
 	if (!isTouchEngineLoaded || !isTouchEngineReady) {
 		return 0;
@@ -913,6 +944,7 @@ void FFGLTouchEnginePluginBase::ConstructBaseParameters() {
 	// when it has something to say, and no tox parameters exist at that point.
 	SetParamVisibility(LogParamID, true, false);
 	SetParamVisibility(ReleaseIdleParamID, true, false);
+	SetParamVisibility(IdleSecondsParamID, true, false);
 	LogStatus = "idle — no tox loaded";
 	RefreshLogText();
 	StartIdleWatchdog();
@@ -1018,6 +1050,8 @@ void FFGLTouchEnginePluginBase::StartIdleWatchdog() {
 				std::chrono::steady_clock::duration(last) };
 			double idle = std::chrono::duration<double>(
 				std::chrono::steady_clock::now() - lastRender).count();
+			// >= so an Idle Seconds of 0 means "release as soon as rendering
+			// stops", honoured within one 500 ms tick.
 			if (idle >= IdleReleaseSeconds) {
 				ReleaseEngineForIdle();
 			}

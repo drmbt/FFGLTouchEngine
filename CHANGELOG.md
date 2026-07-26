@@ -8,6 +8,40 @@ to the branch that carries it (`fix/stability`, `feat/slot-naming-ranges`,
 `feat/dynamic-params`) and holds the migration and tox-authoring notes. Full
 investigation notes live in [docs/knowledge/](docs/knowledge/README.md).
 
+## v3.4.0 — 2026-07-26 (branch `modernize-te`)
+
+### Added
+- **`Idle Seconds` — the release threshold is now per clip**, 0–300, default 20.
+  One global value cannot serve both a workhorse effect that gets cut back to
+  and a one-shot fired once for a track: too short and a return stalls for
+  25–40 s, too long and the memory is never reclaimed. Raise it for anything
+  re-fired inside the window; lower it for material that is done once played.
+
+  `0` means "release as soon as rendering stops", honoured within one 500 ms
+  watchdog tick. It works, but it is fragile — *any* momentary gap in rendering
+  then costs a full reload.
+
+  Registered as `FF_TYPE_INTEGER`, not `FF_TYPE_STANDARD`: the SDK's
+  `SetParamInfo` hard-clamps a STANDARD default into `[0,1]` *before* any range
+  is declared, so a default of 20 silently arrived as 1 and every clip released
+  after a single second. Integer defaults pass through untouched, and whole
+  seconds is the right granularity regardless.
+
+### Notes on what the threshold measures
+The watchdog checks exactly one thing: **how long since `ProcessOpenGL` was last
+called**. There is no notion of "playing", "connected" or "on screen" — only
+whether the host has recently asked the plugin to draw. Two consequences:
+
+- Swapping to a different clip on the same layer does **not** release the old
+  one immediately; its clock starts at its last frame and it releases
+  `Idle Seconds` later. Nothing tells the displaced clip it was displaced —
+  Resolume calls neither `Disconnect()` on it nor anything else — so
+  "B took the layer" and "the frame loop paused" are the same observation.
+  During that window both engines are resident.
+- Re-firing **within** the threshold is a complete no-op, not an unload/reload:
+  the instance was never released, so rendering simply resumes with no reload,
+  no re-enumeration and no parameter round trip.
+
 ## v3.3.0 — 2026-07-26 (branch `modernize-te`)
 
 ### Added

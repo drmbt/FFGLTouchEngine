@@ -118,10 +118,21 @@ protected:
 	// from the render loop going quiet.
 	FFUInt32 ReleaseIdleParamID = 0;
 	bool ReleaseWhenIdle = true;
-	// Long enough that a transition, a beat-synced retrigger or a brief cut away
-	// does not pay the reload cost. Reloading is expensive (25-40 s cold), so
-	// this errs towards holding on.
-	static constexpr double IdleReleaseSeconds = 20.0;
+
+	// Seconds of no rendering before the engine is handed back, exposed per
+	// clip as "Idle Seconds". 20 s by default: long enough that a transition, a
+	// beat-synced retrigger or a brief cut away does not pay the reload cost,
+	// short enough to reclaim between tracks. The failure is asymmetric —
+	// releasing too eagerly stalls a return for 25-40 s, holding on too long
+	// only costs memory already being held — so it errs towards holding on.
+	//
+	// 0 means "release as soon as rendering stops" (within one watchdog tick).
+	// That is honoured, but it is fragile: any momentary gap in rendering then
+	// costs a full reload.
+	FFUInt32 IdleSecondsParamID = 0;
+	double IdleReleaseSeconds = 20.0;
+	static constexpr double IdleSecondsDefault = 20.0;
+	static constexpr double IdleSecondsMax = 300.0;
 
 	// Stamped by ProcessOpenGL on both plugins. Atomic so the render thread
 	// never blocks on the watchdog.

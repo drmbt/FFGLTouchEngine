@@ -673,6 +673,50 @@ double FFGLTouchEnginePluginBase::DenormalizeFromHost(FFUInt32 paramID, double h
 	return it->second.first + hostValue * (it->second.second - it->second.first);
 }
 
+bool FFGLTouchEnginePluginBase::IsColorFamilySlot(FFUInt32 ParamID) const {
+	return ParamID >= ColorFamilyBase() && ParamID < ColorFamilyBase() + MaxParamsByType;
+}
+
+FFUInt32 FFGLTouchEnginePluginBase::ColorQuadHead(FFUInt32 ParamID) const {
+	const FFUInt32 base = ColorFamilyBase();
+	return base + ((ParamID - base) / 4) * 4;
+}
+
+// Host wrote one HSBA channel. HSBA is host-authoritative (hue survives grays);
+// the RGBA derivation feeds the children so the existing whole-vector push path
+// carries the color to TouchEngine unchanged.
+void FFGLTouchEnginePluginBase::SetHsbaChannel(FFUInt32 ParamID, float value) {
+	const FFUInt32 head = ColorQuadHead(ParamID);
+	std::array<float, 4>& hsba = ColorQuadHsba[head];
+	hsba[ParamID - head] = value;
+
+	float r = 0, g = 0, b = 0;
+	drmbt::HsbToRgb(hsba[0], hsba[1], hsba[2], r, g, b);
+	const float rgba[4] = { r, g, b, hsba[3] };
+	for (FFUInt32 i = 0; i < 4; i++) {
+		// A quad enumerated from a 3-component TD RGB par has no active alpha
+		// child — only touch the children that exist.
+		if (ActiveParams.find(head + i) == ActiveParams.end()) {
+			continue;
+		}
+		ParameterMapFloat[head + i] = rgba[i];
+		DirtyParams.insert(head + i);
+	}
+}
+
+// TouchEngine wrote the RGBA children (enumeration, echo, ValueChange): derive
+// the quad's HSBA for the host, preserving hue/saturation where undefined.
+void FFGLTouchEnginePluginBase::RefreshQuadHsbaFromRgba(FFUInt32 headParamID) {
+	std::array<float, 4>& hsba = ColorQuadHsba[headParamID];
+	const float r = static_cast<float>(ParameterMapFloat.count(headParamID) ? ParameterMapFloat[headParamID] : 0.0);
+	const float g = static_cast<float>(ParameterMapFloat.count(headParamID + 1) ? ParameterMapFloat[headParamID + 1] : 0.0);
+	const float b = static_cast<float>(ParameterMapFloat.count(headParamID + 2) ? ParameterMapFloat[headParamID + 2] : 0.0);
+	drmbt::RgbToHsb(r, g, b, hsba[0], hsba[1], hsba[0], hsba[1], hsba[2]);
+	if (ParameterMapFloat.count(headParamID + 3)) {
+		hsba[3] = static_cast<float>(ParameterMapFloat[headParamID + 3]);
+	}
+}
+
 bool FFGLTouchEnginePluginBase::IsStashableSlot(FFUInt32 ParamID) const {
 	// Only pre-allocated tox slots; the reserved header controls (Tox File,
 	// Reload, ... Idle Seconds) all have handlers of their own above the
@@ -706,9 +750,22 @@ void FFGLTouchEnginePluginBase::ApplyPendingHostValues() {
 			case FF_TYPE_RED:
 			case FF_TYPE_GREEN:
 			case FF_TYPE_BLUE:
-			case FF_TYPE_ALPHA:
 				// Color slots keep the native 0-1 wire.
 				ParameterMapFloat[ParamID] = value;
+				break;
+			case FF_TYPE_HUE:
+			case FF_TYPE_SATURATION:
+			case FF_TYPE_BRIGHTNESS:
+				// HSBA quad channels: the stashed value is host-wire HSBA; route
+				// it through the quad so the RGBA children are re-derived.
+				SetHsbaChannel(ParamID, value);
+				break;
+			case FF_TYPE_ALPHA:
+				if (UseHsbaColorQuads) {
+					SetHsbaChannel(ParamID, value);
+				} else {
+					ParameterMapFloat[ParamID] = value;
+				}
 				break;
 			case FF_TYPE_INTEGER:
 			case FF_TYPE_OPTION:
@@ -821,6 +878,18 @@ FFResult FFGLTouchEnginePluginBase::SetFloatParameter(unsigned int dwIndex, floa
 		return FF_SUCCESS;
 	}
 
+	// The six preset controls are plugin-owned, like the idle controls above —
+	// they must work with no tox loaded, so they sit ahead of the ready guards.
+	if (EnablePresetControls) {
+		if (HandlePresetSetFloat(dwIndex, value)) {
+			return FF_SUCCESS;
+		}
+		// Any write a recall could also produce arms the host-restore adoption
+		// guard — including the stash path below (comp load sprays values while
+		// the tox load is still in flight).
+		NoteRecallSetWrite(dwIndex);
+	}
+
 	if (!isTouchEngineLoaded || !isTouchEngineReady) {
 		// Preset recall: the host sprays every slot's value while the load it
 		// just triggered is still in flight. Keep them for enumeration.
@@ -855,6 +924,11 @@ FFResult FFGLTouchEnginePluginBase::SetFloatParameter(unsigned int dwIndex, floa
 		return FF_SUCCESS;
 	}
 
+	// HSBA picker quads: the host wire carries HSBA, TE keeps straight RGBA.
+	if (UseHsbaColorQuads && IsColorFamilySlot(dwIndex)) {
+		SetHsbaChannel(dwIndex, value);
+		return FF_SUCCESS;
+	}
 
 	ParameterMapFloat[dwIndex] = DenormalizeFromHost(dwIndex, value);
 	DirtyParams.insert(dwIndex);
@@ -925,6 +999,14 @@ float FFGLTouchEnginePluginBase::GetFloatParameter(unsigned int dwIndex) {
 	if (IdleSecondsParamID != 0 && dwIndex == IdleSecondsParamID) {
 		return static_cast<float>(IdleReleaseSeconds);
 	}
+	// Ahead of the ready guard for the same reason as the idle controls: the
+	// preset block is plugin state the host must read back with nothing loaded.
+	if (EnablePresetControls) {
+		float value = 0.0f;
+		if (GetPresetFloat(dwIndex, value)) {
+			return value;
+		}
+	}
 	if (!isTouchEngineLoaded || !isTouchEngineReady) {
 		return 0;
 
@@ -944,6 +1026,13 @@ float FFGLTouchEnginePluginBase::GetFloatParameter(unsigned int dwIndex) {
 		return ParameterMapBool[dwIndex];
 	}
 
+	// HSBA picker quads report the host-authoritative HSBA state, not the RGBA
+	// the children hold for TouchEngine.
+	if (UseHsbaColorQuads && IsColorFamilySlot(dwIndex)) {
+		const FFUInt32 head = ColorQuadHead(dwIndex);
+		auto quad = ColorQuadHsba.find(head);
+		return quad != ColorQuadHsba.end() ? quad->second[dwIndex - head] : 0.0f;
+	}
 
 	return static_cast<float>(NormalizeToHost(dwIndex, ParameterMapFloat[dwIndex]));
 }
@@ -1031,19 +1120,40 @@ void FFGLTouchEnginePluginBase::ConstructBaseParameters() {
 		SetParamVisibility(i, false, false);
 	}
 
-	// Pre-allocate color picker slots (groups of 4: R, G, B, A)
-	// Each color uses 4 consecutive param slots
-	uint32_t colorBase = (MaxParamsByType * 6) + OffsetParamsByType;
+	// Pre-allocate color picker slots (groups of 4 consecutive params).
+	//
+	// Two layouts, chosen per plugin variant:
+	// - RGBA-typed (upstream-compatible): four loose gradient sliders in the host.
+	// - HSBA-typed: a consecutive HUE->SATURATION->BRIGHTNESS->ALPHA run is what
+	//   makes Resolume render its NATIVE color picker (PICK/HSB/RGB/Palette tabs
+	//   + alpha strip). Names follow the drmbt convention — the quad head carries
+	//   the picker's name, the rest are suffixed. Suffixes are kept short because
+	//   FFGL static names truncate at 16 chars and must stay unique (they are the
+	//   host's OSC/serialization identity).
+	uint32_t colorBase = ColorFamilyBase();
 	for (uint32_t i = 0; i < MaxParamsByType; i += 4) {
 		std::string colorName = std::string("Color") + std::to_string(i / 4 + 1);
-		SetParamInfo(colorBase + i,     (colorName + "R").c_str(), FF_TYPE_RED,   0.0f);
-		SetParamInfo(colorBase + i + 1, (colorName + "G").c_str(), FF_TYPE_GREEN, 0.0f);
-		SetParamInfo(colorBase + i + 2, (colorName + "B").c_str(), FF_TYPE_BLUE,  0.0f);
-		SetParamInfo(colorBase + i + 3, (colorName + "A").c_str(), FF_TYPE_ALPHA, 1.0f);
+		if (UseHsbaColorQuads) {
+			SetParamInfo(colorBase + i,     colorName.c_str(),                  FF_TYPE_HUE,        0.0f);
+			SetParamInfo(colorBase + i + 1, (colorName + "_sat").c_str(),       FF_TYPE_SATURATION, 0.0f);
+			SetParamInfo(colorBase + i + 2, (colorName + "_bri").c_str(),       FF_TYPE_BRIGHTNESS, 1.0f);
+			SetParamInfo(colorBase + i + 3, (colorName + "_alpha").c_str(),     FF_TYPE_ALPHA,      1.0f);
+		} else {
+			SetParamInfo(colorBase + i,     (colorName + "R").c_str(), FF_TYPE_RED,   0.0f);
+			SetParamInfo(colorBase + i + 1, (colorName + "G").c_str(), FF_TYPE_GREEN, 0.0f);
+			SetParamInfo(colorBase + i + 2, (colorName + "B").c_str(), FF_TYPE_BLUE,  0.0f);
+			SetParamInfo(colorBase + i + 3, (colorName + "A").c_str(), FF_TYPE_ALPHA, 1.0f);
+		}
 		SetParamVisibility(colorBase + i,     false, false);
 		SetParamVisibility(colorBase + i + 1, false, false);
 		SetParamVisibility(colorBase + i + 2, false, false);
 		SetParamVisibility(colorBase + i + 3, false, false);
+	}
+
+	// The preset block appends AFTER every pre-allocated family, so no
+	// tox-driven slot index moves when a variant enables it.
+	if (EnablePresetControls) {
+		ConstructPresetParameters();
 	}
 
 	// Registered in the constructor at index 4 (see there). Kept visible
@@ -1295,6 +1405,10 @@ void FFGLTouchEnginePluginBase::ResetBaseParameters() {
 	RefreshLogText();
 
 	hasVideoOutput = false;
+	// A teardown invalidates the quads' host state and any in-flight preset
+	// glide — its targets point at slots that are about to be re-enumerated.
+	ColorQuadHsba.clear();
+	PresetMorpher.Begin({}, 0.0f);
 	ActiveParams.clear();
 	ActiveVectorParams.clear();
 	VectorParameters.clear();
@@ -1470,6 +1584,17 @@ void FFGLTouchEnginePluginBase::GetAllParameters() {
 	// over both the tox's saved state and the retained-value snapshot above.
 	ApplyPendingHostValues();
 
+	// The idle-release restore above wrote raw RGBA into color children without
+	// re-deriving the host-side HSBA state — square the quads up. (Pending host
+	// values went through SetHsbaChannel, for which this is a no-op.)
+	if (UseHsbaColorQuads) {
+		for (auto& vp : VectorParameters) {
+			if (IsColorFamilySlot(vp.children[0])) {
+				RefreshQuadHsbaFromRgba(ColorQuadHead(vp.children[0]));
+			}
+		}
+	}
+
 	// Re-raise value events now that the walk is complete. Enumeration runs on
 	// the TE callback thread while the host UI polls in parallel, so the host
 	// can consume a slot's event and cache a stale display string before that
@@ -1540,7 +1665,12 @@ void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELi
 
 
 
-			static const FFUInt32 colorTypes[] = { FF_TYPE_RED, FF_TYPE_GREEN, FF_TYPE_BLUE, FF_TYPE_ALPHA };
+			// Must match the types the slots were DECLARED with in
+			// ConstructBaseParameters — an HSBA-declared slot registered here as
+			// RED would desync ParameterMapType from what the host believes.
+			static const FFUInt32 rgbaTypes[] = { FF_TYPE_RED, FF_TYPE_GREEN, FF_TYPE_BLUE, FF_TYPE_ALPHA };
+			static const FFUInt32 hsbaTypes[] = { FF_TYPE_HUE, FF_TYPE_SATURATION, FF_TYPE_BRIGHTNESS, FF_TYPE_ALPHA };
+			const FFUInt32* colorTypes = UseHsbaColorQuads ? hsbaTypes : rgbaTypes;
 
 			// Align to start of a group of 4 so R/G/B/A land on the correct pre-allocated types
 			uint32_t colorGroupBase = (ColorParamCount / 4) * 4;
@@ -1587,7 +1717,14 @@ void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELi
 					// remaps between the 0-1 prototype and the TD range.
 					ParameterRanges[ParamID] = EffectiveRange(min[i], max[i], value[i]);
 				}
-				SetParamDisplayName(ParamID, linkInfo->label + std::string(".") + Suffix[i], true);
+				if (linkInfo->intent == TELinkIntentColorRGBA && UseHsbaColorQuads) {
+					// The quad head's display name labels the whole picker; the
+					// other channels are hidden behind it in the host UI.
+					SetParamDisplayName(ParamID, i == 0 ? std::string(linkInfo->label)
+						: linkInfo->label + std::string(".") + "HSBA"[i], true);
+				} else {
+					SetParamDisplayName(ParamID, linkInfo->label + std::string(".") + Suffix[i], true);
+				}
 				RaiseParamEvent(ParamID, FF_EVENT_FLAG_VALUE);
 				SetParamVisibility(ParamID, true, true);
 
@@ -1596,6 +1733,15 @@ void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELi
 			// Advance color counter by a full group of 4 to keep alignment
 			if (linkInfo->intent == TELinkIntentColorRGBA) {
 				ColorParamCount = colorGroupBase + 4;
+				if (UseHsbaColorQuads) {
+					// Seed the host-side HSBA state from the tox's RGBA value.
+					// Fresh quad: no previous hue/saturation to preserve.
+					const FFUInt32 head = ColorFamilyBase() + colorGroupBase;
+					std::array<float, 4>& hsba = ColorQuadHsba[head];
+					hsba = { 0.0f, 0.0f, 0.0f, linkInfo->count > 3 ? static_cast<float>(value[3]) : 1.0f };
+					drmbt::RgbToHsb(static_cast<float>(value[0]), static_cast<float>(value[1]),
+						static_cast<float>(value[2]), 0.0f, 0.0f, hsba[0], hsba[1], hsba[2]);
+				}
 			}
 
 			VectorParameters.push_back(info);
@@ -2100,11 +2246,28 @@ void FFGLTouchEnginePluginBase::ApplyEchoValue(FFUInt32 ParamID, double numeric,
 	case FF_TYPE_GREEN:
 	case FF_TYPE_BLUE:
 	case FF_TYPE_ALPHA:
+	case FF_TYPE_HUE:
+	case FF_TYPE_SATURATION:
+	case FF_TYPE_BRIGHTNESS:
 	{
 		if (ParameterMapFloat[ParamID] == numeric) {
 			return;
 		}
 		ParameterMapFloat[ParamID] = numeric;
+		// HSBA quad children: the echo carries TD's RGBA component, which lands
+		// in ParameterMapFloat above (TE-side storage is always RGBA). Re-derive
+		// the quad's host HSBA and poke every channel — one RGBA component
+		// moving changes all of H, S and B on the host wire.
+		if (UseHsbaColorQuads && IsColorFamilySlot(ParamID)) {
+			const FFUInt32 head = ColorQuadHead(ParamID);
+			RefreshQuadHsbaFromRgba(head);
+			for (FFUInt32 i = 0; i < 4; i++) {
+				if (ActiveParams.find(head + i) != ActiveParams.end()) {
+					RaiseParamEvent(head + i, FF_EVENT_FLAG_VALUE);
+				}
+			}
+			return;
+		}
 		auto range = ParameterRanges.find(ParamID);
 		if (range != ParameterRanges.end()) {
 			range->second.first = std::min(range->second.first, numeric);
@@ -2337,10 +2500,12 @@ void FFGLTouchEnginePluginBase::linkCallback(TELinkEvent event, const char* iden
 			if (TEInstanceLinkGetDoubleValue(instance, identifier, TELinkValueCurrent, value, vp.count) != TEResultSuccess) {
 				return;
 			}
+			bool changed = false;
 			for (uint8_t i = 0; i < vp.count; i++) {
 				if (ParameterMapFloat[vp.children[i]] == value[i]) {
 					continue;
 				}
+				changed = true;
 				ParameterMapFloat[vp.children[i]] = value[i];
 				auto range = ParameterRanges.find(vp.children[i]);
 				if (range != ParameterRanges.end()) {
@@ -2348,6 +2513,15 @@ void FFGLTouchEnginePluginBase::linkCallback(TELinkEvent event, const char* iden
 					range->second.second = std::max(range->second.second, value[i]);
 				}
 				RaiseParamEvent(vp.children[i], FF_EVENT_FLAG_VALUE);
+			}
+			// HSBA quads: TE just moved the RGBA children — re-derive the host
+			// HSBA and poke the whole quad (one component changes all of H/S/B).
+			if (changed && UseHsbaColorQuads && IsColorFamilySlot(vp.children[0])) {
+				const FFUInt32 head = ColorQuadHead(vp.children[0]);
+				RefreshQuadHsbaFromRgba(head);
+				for (uint8_t i = 0; i < vp.count; i++) {
+					RaiseParamEvent(vp.children[i], FF_EVENT_FLAG_VALUE);
+				}
 			}
 			return;
 		}

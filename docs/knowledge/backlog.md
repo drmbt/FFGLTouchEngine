@@ -216,7 +216,38 @@ Remaining polish, if it proves wanted:
 - **Mixed multi-instance**: three simultaneous *sources* were verified; a
   source+FX+FX combination was not.
 
-## 6. Upstream issues worth re-checking
+## 6. TEFX Presets variant needs its in-Arena smoke test — `OPEN`
+
+v3.6.0 (branch `feat/te-fx-presets`) added `FFGLTouchEngineFXPresets` —
+"TEFX Presets", ID `TEFP`: HSBA-typed color quads (native Resolume picker) plus
+the drmbt-custom-fx preset-recall-with-morph block (`Preset`/`Morph`/`Recall`/
+`Rescan`/`Snap`/`Curve` at indices 287–292). Built clean on Windows and passed
+`probe_dll.ps1 -Params` (full 293-param layout matches design), but the probe
+has no GL context and no host, so everything user-visible is unverified:
+
+- [ ] Picker renders: load a tox with an RGBA par — the color param must show
+      Arena's internal picker (PICK/HSB/RGB/Palette + alpha strip), not loose
+      sliders. Verify picked color reaches TD correctly (esp. hue at gray:
+      drag brightness to 0 and back — hue must survive).
+- [ ] TD→host color echo (Par CHOP/DAT with `Colorr/g/b/a` channels) updates
+      the picker live.
+- [ ] Preset round trip: save presets from Arena's P. dropdown, `Rescan`, menu
+      lists them; recall glides over `Morph` seconds with the chosen `Curve`;
+      `Snap` jumps; recall must NOT reload the tox.
+- [ ] Host-restore adoption: loading a comp / recalling a native P. preset with
+      a stored `Preset` selection must adopt without a surprise recall (watch
+      the log for exactly one "adopted without recall" line, per the
+      ffgl-preset-morph skill's diagnostics).
+- [ ] Existing TouchEngineFX/TouchEngine untouched: same comp loads, param
+      layout identical (flags off — but confirm in-host).
+- [ ] macOS build of the new target (CMake wiring mirrors the FX target,
+      untested there).
+
+Known naming constraint, not a bug: FFGL's PluginName is 16 chars, so the
+display name is "TEFX Presets" (not "TouchEngineFX_presets") and the preset
+folder is `Presets/Video Effects/TEFX Presets/`.
+
+## 7. Upstream issues worth re-checking
 
 From [issues-audit.md](issues-audit.md), with what is now known:
 

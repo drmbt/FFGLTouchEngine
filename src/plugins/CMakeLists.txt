@@ -1,2 +1,3 @@
 add_subdirectory(FFGLTouchEngine)
 add_subdirectory(FFGLTouchEngineFX)
+add_subdirectory(FFGLTouchEngineFXPresets)

@@ -1,5 +1,9 @@
 #include "TouchEngineFX.h"
 
+// FFGLTouchEngineFXPresets compiles this translation unit too (it reuses the
+// whole FX class) and registers its own CFFGLPluginInfo/CFFGLThumbnailInfo —
+// both are process-wide singletons, so this file's must not exist there.
+#ifndef FFGLTE_NO_PLUGININFO
 static CFFGLPluginInfo PluginInfo(
 	PluginFactory< FFGLTouchEngineFX >,// Create method
 	"TEFX",                        // Plugin unique ID
@@ -14,6 +18,7 @@ static CFFGLPluginInfo PluginInfo(
 );
 
 static CFFGLThumbnailInfo ThumbnailInfo(160, 120, thumbnail);
+#endif
 
 static const char vertexShaderCode[] = R"(#version 410 core
 uniform vec2 MaxUV;
@@ -88,6 +93,11 @@ void textureCallback(TED3D11Texture* texture, TEObjectEvent event, void* info)
 #endif
 
 FFGLTouchEngineFX::FFGLTouchEngineFX()
+	: FFGLTouchEngineFX(false, nullptr)
+{
+}
+
+FFGLTouchEngineFX::FFGLTouchEngineFX(bool hsbaColorQuads, const char* presetEffectName)
 	: FFGLTouchEnginePluginBase()
 {
 	// No srand() here any more: GenerateRandomString seeds its own engine from
@@ -95,6 +105,13 @@ FFGLTouchEngineFX::FFGLTouchEngineFX()
 	// insufficient (two hosts started in the same second produced identical
 	// Spout names) and harmful (it reset the sequence under any generator
 	// instance constructed earlier in the same process).
+
+	// Variant flags must be in place before the parameter families are declared.
+	UseHsbaColorQuads = hsbaColorQuads;
+	if (presetEffectName != nullptr) {
+		EnablePresetControls = true;
+		PresetEffectName = presetEffectName;
+	}
 
 	// Input properties
 	SetMinInputs(0);
@@ -173,6 +190,12 @@ FFResult FFGLTouchEngineFX::ProcessOpenGL(ProcessOpenGLStruct* pGL)
 	NoteRendered();
 
 	std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
+
+	// Advance any in-flight preset glide (no-op unless the variant enables the
+	// preset block). Ahead of the ready guards on purpose: dirtied values just
+	// accumulate until TE is ready to receive them, and the host UI still
+	// glides while the engine is mid-cook.
+	StepPresetMorph();
 
 	if (instance == nullptr || !isTouchEngineLoaded || !isTouchEngineReady || isTouchFrameBusy)
 	{

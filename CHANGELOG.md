@@ -8,6 +8,61 @@ to the branch that carries it (`fix/stability`, `feat/slot-naming-ranges`,
 `feat/dynamic-params`) and holds the migration and tox-authoring notes. Full
 investigation notes live in [docs/knowledge/](docs/knowledge/README.md).
 
+## v3.6.0 — 2026-07-29 (branch `feat/te-fx-presets`)
+
+### Added
+- **New plugin variant: `FFGLTouchEngineFXPresets` — "TEFX Presets" (ID `TEFP`,
+  v0.1.0).** The FX plugin plus two opt-in features carried by the shared base
+  (both OFF for the existing plugins, whose param layouts and behavior are
+  byte-for-byte unchanged). Ported from the proven implementations in
+  drmbt-custom-fx (`ffgl-color-picker` / `ffgl-preset-morph` skills;
+  `sdk/drmbt/PresetMorph.*` copied to `src/plugins/shared/`).
+
+  - **Native Resolume color pickers for TD-side RGBA parameters**
+    (`UseHsbaColorQuads`). The pre-allocated color family is declared as
+    consecutive `HUE→SATURATION→BRIGHTNESS→ALPHA` runs (`Color1`, `Color1_sat`,
+    `Color1_bri`, `Color1_alpha`, …) — the type run is what makes Arena render
+    its internal picker (PICK/HSB/RGB/Palette tabs + alpha strip); RGBA-typed
+    runs only ever render as loose sliders (verified in Arena 7.27.1, per the
+    drmbt findings). The host wire carries HSBA while TE keeps straight RGBA:
+    `ParameterMapFloat` for the children stays RGBA (vector push/echo paths
+    untouched) and a per-quad `ColorQuadHsba` holds the host-authoritative HSBA
+    so hue survives grays (RGB→HSB is undefined there — deriving on every read
+    would snap hue back to red at brightness/saturation 0). Conversions happen
+    at the host boundary (`SetHsbaChannel` / `RefreshQuadHsbaFromRgba`),
+    including the TD→host echo and idle-release restore paths.
+
+    This is a NEW plugin rather than a change to TouchEngineFX because the
+    switch changes what stored color values *mean*: a comp saved against
+    RGBA-typed slots would reinterpret red (1,0,0) as hue 1/sat 0/bright 0 =
+    black.
+
+  - **Host-preset recall with morph** (`EnablePresetControls`): a six-param
+    block appended after all pre-allocated families (indices 287–292, so no
+    tox-driven slot moves) — `Preset` (menu scanned from Arena's own per-effect
+    preset XMLs under `Documents/Resolume Arena/Presets/Video Effects/TEFX
+    Presets/`; element 0 = None), `Morph` (0–10 s glide, default 0.5),
+    `Recall`, `Rescan` (live menu rebuild via `FF_EVENT_FLAG_ELEMENTS`,
+    selection re-matched by name), `Snap` (momentary instant-recall modifier;
+    finishes an in-flight glide, settling the double-mapping race), `Curve`
+    (14 monotonic easings, default SineInOut). Preset *saving* stays native
+    host UI (the P. dropdown) — the plugin only reads those XMLs. Recall
+    carries values only and never touches the Tox File slot; floats and color
+    quads glide (hue shortest-path around the wheel), ints/bools/menus snap,
+    text and pulses are excluded. The glide is clocked on rendered-frame deltas
+    (clamped), so a bypassed/ejected clip pauses instead of finishing on wall
+    time. Host restores (comp load, native P. recall) are adopted without
+    firing a surprise recall via the write-burst guard from drmbt — only slots
+    a recall itself writes may arm it.
+
+  Plugin display name: FFGL's `PluginName` is a hard 16-char field, so the
+  intended "TouchEngineFX_presets" cannot fit on the wire — the shipped name is
+  **"TEFX Presets"** (also the preset folder name, which must match exactly).
+
+  Verified headlessly (probe_dll: scan lifecycle + full 293-param dump matches
+  design). Not yet smoke-tested in Arena — picker rendering, preset round trip,
+  and morph feel need the in-host pass.
+
 ## v3.5.0 — 2026-07-29 (branch `modernize-te`)
 
 ### Fixed

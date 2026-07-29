@@ -31,6 +31,7 @@
 #endif
 
 #include "FFGL/FFGLSDK.h"
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <map>
@@ -38,6 +39,7 @@
 #include <string>
 #include <thread>
 #include "TouchEngine/TouchObject.h"
+#include "PresetMorph.h"
 
 #ifdef _WIN32
 #include "TouchEngine/TED3D11.h"
@@ -307,6 +309,109 @@ protected:
 
 	std::set<FFUInt32> ActiveVectorParams;
 	std::vector<VectorParameterInfo> VectorParameters;
+
+	// ---- Native color picker (HSBA quads) ------------------------------------
+	// Resolume renders its internal color picker (PICK/HSB/RGB/Palette tabs +
+	// alpha strip) for a consecutive run of HSBA-TYPED params — HUE, SATURATION,
+	// BRIGHTNESS, ALPHA, in that order. RGBA-typed runs only ever render as four
+	// loose gradient sliders (verified empirically in Arena 7.27.1; see the
+	// ffgl-color-picker skill in drmbt-custom-fx). With this flag on, the
+	// pre-allocated color family is declared as HSBA quads and TD-side RGBA
+	// parameters are surfaced through them.
+	//
+	// The host wire then carries HSBA while TouchEngine keeps speaking straight
+	// RGBA: ParameterMapFloat for the four children stays RGBA (so the existing
+	// vector push/echo paths are untouched) and ColorQuadHsba holds the
+	// host-authoritative HSBA state per quad. HSBA is authoritative host-side
+	// because RGB->HSB is lossy exactly where a picker lives (hue is undefined
+	// for grays); deriving HSBA from RGBA on every host read would snap hue back
+	// to red whenever brightness or saturation hits 0.
+	//
+	// Off by default: converting an existing RGBA-typed layout to HSBA keeps the
+	// indices but changes their meaning, so saved comps would reinterpret stored
+	// red 1,0,0 as hue 1/sat 0/bright 0 = black. Only new plugin variants
+	// (FFGLTouchEngineFXPresets) turn it on.
+	bool UseHsbaColorQuads = false;
+	// Key = quad head ParamID; value = { hue, saturation, brightness, alpha }.
+	std::unordered_map<FFUInt32, std::array<float, 4>> ColorQuadHsba;
+	FFUInt32 ColorFamilyBase() const { return OffsetParamsByType + MaxParamsByType * 6; }
+	bool IsColorFamilySlot(FFUInt32 ParamID) const;
+	FFUInt32 ColorQuadHead(FFUInt32 ParamID) const;
+	// Host wrote one HSBA channel: update the quad, re-derive the RGBA children,
+	// and dirty them so the whole vector is pushed to TE.
+	void SetHsbaChannel(FFUInt32 ParamID, float value);
+	// TE wrote the RGBA children (enumeration/echo/ValueChange): re-derive the
+	// quad's HSBA, preserving hue/saturation where they are undefined.
+	void RefreshQuadHsbaFromRgba(FFUInt32 headParamID);
+
+	// ---- In-plugin preset recall with morph -----------------------------------
+	// Ported from drmbt-custom-fx (ffgl-preset-morph skill). Resolume already
+	// saves per-effect presets (its P. dropdown) as XML under
+	// <Documents>/Resolume Arena/Presets/Video Effects/<effect display name>/.
+	// This block reads those same files, so preset SAVING stays native host UI —
+	// the plugin only adds recall-with-glide: a Preset menu built from a folder
+	// scan, a Morph time, Recall/Rescan triggers, a Snap toggle and a Curve menu.
+	// All six sit AFTER every pre-allocated family so no tox-driven slot moves.
+	// PresetEffectName must match the plugin's display name exactly — it is the
+	// preset folder's name.
+	bool EnablePresetControls = false;
+	std::string PresetEffectName;
+	FFUInt32 PresetParamID = 0;
+	FFUInt32 MorphParamID = 0;
+	FFUInt32 RecallParamID = 0;
+	FFUInt32 RescanParamID = 0;
+	FFUInt32 SnapParamID = 0;
+	FFUInt32 CurveParamID = 0;
+	// Element 0 is always "None" (fresh instances never auto-recall); elements
+	// 1..N are the sorted .xml stems. Index == element value.
+	std::vector<std::string> PresetNames;
+	std::vector<std::string> PresetPaths;
+	int PresetSelection = 0;
+	float MorphSecondsParam = 0.5f;
+	bool SnapRecall = false;
+	int CurveSelectionParam = drmbt::preset::kDefaultCurve;
+	drmbt::Morpher PresetMorpher;
+	// dt clock for the morph: steady_clock deltas between rendered frames,
+	// clamped per step, so a bypassed/ejected clip pauses its glide instead of
+	// silently finishing on wall time.
+	std::chrono::steady_clock::time_point LastMorphTick{};
+	bool MorphTickValid = false;
+	// Host-restore adoption (the double-recall defense): Arena serializes the
+	// Preset param into its preset files and comps, so a stored selection comes
+	// back as a SetFloatParameter on P.-dropdown load and comp load and would
+	// fire a surprise recall. Host restores arrive as a BURST of param writes,
+	// while a user menu click sets only Preset — so writes to recall-set slots
+	// stamp MorphFrameCounter, and a Preset change landing within a few frames
+	// of one (or before the first render) adopts the selection without recall.
+	uint64_t MorphFrameCounter = 0;
+	uint64_t LastRecallSetWriteFrame = 0;
+	bool HasRecallSetWrite = false;
+	bool RenderedOnce = false;
+	static constexpr uint64_t PresetAdoptWindowFrames = 15;
+
+	void ConstructPresetParameters();
+	void ScanPresetFolder();
+	void ApplyPresetElements(bool raiseEvent);
+	// Handle a host float write to one of the six preset controls. Returns true
+	// when consumed. Sits AHEAD of the TE-ready guards: these are plugin-owned,
+	// like the Log slot and the idle controls.
+	bool HandlePresetSetFloat(unsigned int dwIndex, float value);
+	// Read-back for the six controls; returns true when dwIndex is one of them.
+	bool GetPresetFloat(unsigned int dwIndex, float& outValue);
+	// Stamp writes that a recall could also produce — ONLY those may arm the
+	// adoption guard (an event or host-animated slot would keep it permanently
+	// armed and recall would silently never fire).
+	void NoteRecallSetWrite(FFUInt32 ParamID);
+	// Parse the selected preset XML into targets and start the glide. Values
+	// only — the Tox File slot is deliberately never touched by a recall.
+	void RecallSelectedPreset();
+	void RescanPresets();
+	// Advance the in-flight glide by one rendered frame. Called from
+	// ProcessOpenGL under TEStateMutex; no-op unless EnablePresetControls.
+	void StepPresetMorph();
+	// The static (serialization/OSC) name of a pre-allocated slot — what Arena
+	// writes into its preset XMLs ("Float1", "Toggle3", "Menu2", "Color1"...).
+	std::string StaticSlotName(FFUInt32 ParamID) const;
 
 	// TD-side [min,max] per FF_TYPE_STANDARD slot. The FFGL wire and the host
 	// slider stay at the 0-1 prototype range (there is no FFGL range-change

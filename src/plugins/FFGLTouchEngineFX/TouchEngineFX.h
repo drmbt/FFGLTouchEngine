@@ -10,6 +10,17 @@ public:
 	FFGLTouchEngineFX();
 	~FFGLTouchEngineFX() override;
 
+protected:
+	// Variant hook (FFGLTouchEngineFXPresets): the flags must be set before
+	// ConstructBaseParameters() runs in this constructor's body, which rules
+	// out setting them from a derived constructor. hsbaColorQuads declares the
+	// color family as HSBA runs (Resolume's native picker); a non-null
+	// presetEffectName enables the preset block and names the preset folder —
+	// it must match the plugin's display name exactly.
+	FFGLTouchEngineFX(bool hsbaColorQuads, const char* presetEffectName);
+
+public:
+
     FFGLTouchEngineFX(const FFGLTouchEngineFX& other) = delete;
     FFGLTouchEngineFX& operator=(const FFGLTouchEngineFX& other) = delete;
 

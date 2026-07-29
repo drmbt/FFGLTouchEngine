@@ -8,6 +8,45 @@ to the branch that carries it (`fix/stability`, `feat/slot-naming-ranges`,
 `feat/dynamic-params`) and holds the migration and tox-authoring notes. Full
 investigation notes live in [docs/knowledge/](docs/knowledge/README.md).
 
+## v3.5.0 — 2026-07-29 (branch `modernize-te`)
+
+### Fixed
+- **Resolume presets now recall tox parameter values, not just the tox path.**
+  Two halves, both required:
+
+  - **Same-path load guard.** Resolume re-sends the Tox File path on every
+    preset recall (and on the second recall of the same preset). `SetTextParameter`
+    reloaded unconditionally, tearing down the live comp — observed to come back
+    `TEResultComponentErrors`, leaving a dead instance — and re-arming the
+    not-ready guards right before the preset's values arrived. An identical path
+    against an instance that is loaded or loading is now a logged no-op; the
+    Reload slot remains the way to force a real reload.
+
+  - **Pending host-value cache.** Preset recall sprays every slot's value while
+    the load the path just triggered is still in flight; those sets were silently
+    dropped by the not-ready guards, and enumeration then overwrote everything
+    with the tox's own saved state anyway. Values arriving with no tox enumerated
+    are now stashed raw (`FF_TYPE_STANDARD` still 0-1 normalized — ranges don't
+    exist yet) and applied at the end of `GetAllParameters`: after the
+    idle-release retained-value restore (an explicit host set is newer intent),
+    before the final `RaiseParamEvent` sweep (so the host re-reads preset values,
+    not tox defaults), and routed through the dirty-only push so the par echo's
+    `LastPushFrame` guard protects them. Pulse-family slots are never stashed — a
+    recalled preset must not fire events. The cache clears on path change,
+    Unload, Clear, and after enumeration; values matching no slot (preset saved
+    against a different tox layout) are dropped with a log line.
+
+  Caveat unchanged from any dynamic-param FFGL plugin: a preset is only valid
+  for the tox layout it was saved against — editing the tox's parameters shifts
+  slot assignment.
+
+- **Missing tox routed to Resolume's video relink dialog** (which cannot list a
+  `.tox`, so the preset was unrecoverable). The Tox File slot was declared with
+  bare `SetParamInfof(..., FF_TYPE_FILE)` — no extensions — so Resolume treated
+  it as generic media. Now declared via `SetFileParamInfo(0, "Tox File",
+  { "tox" }, "")` (FFGL 2.2 `FF_GET_FILE_PARAMETER_EXTENSION`). Needs in-Arena
+  verification of both the browse filter and the relink routing.
+
 ## v3.4.1 — 2026-07-26 (branch `modernize-te`)
 
 ### Fixed

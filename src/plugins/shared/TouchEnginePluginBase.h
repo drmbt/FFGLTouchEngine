@@ -317,6 +317,19 @@ protected:
 	std::unordered_map<FFUInt32, std::pair<double, double>> ParameterRanges;
 	double NormalizeToHost(FFUInt32 paramID, double realValue);
 	double DenormalizeFromHost(FFUInt32 paramID, double hostValue);
+
+	// Host values that arrived while no tox was enumerated. Resolume preset
+	// recall sends the Tox File path first (starting an async load) and then
+	// every other slot's value immediately after; with nothing enumerated those
+	// sets used to be dropped, so a preset recalled the tox but none of its
+	// values. They are stashed RAW (FF_TYPE_STANDARD floats still 0-1
+	// normalized — ParameterRanges does not exist yet) and applied at the end
+	// of GetAllParameters in place of the tox's saved state. Pulse-family
+	// slots are never stashed: a recalled preset must not fire events.
+	std::unordered_map<FFUInt32, float> PendingFloatValues;
+	std::unordered_map<FFUInt32, std::string> PendingTextValues;
+	bool IsStashableSlot(FFUInt32 ParamID) const;
+	void ApplyPendingHostValues();
 	char DisplayBuffer[16] = { 0 };
 
 	//Operator link identifiers (input is only set by FX-style toxes)

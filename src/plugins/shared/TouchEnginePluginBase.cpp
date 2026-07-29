@@ -177,7 +177,10 @@ FFGLTouchEnginePluginBase::FFGLTouchEnginePluginBase()
 	isBeingDestroyed(false)
 {
 	// Parameters
-	SetParamInfof(0, "Tox File", FF_TYPE_FILE);
+	// Declared with its extension (FFGL 2.2 FF_GET_FILE_PARAMETER_EXTENSION):
+	// without it Resolume treats the slot as generic media, so a missing tox
+	// routed to the video relink dialog — which cannot list a .tox at all.
+	SetFileParamInfo(0, "Tox File", { "tox" }, "");
 	SetParamInfof(1, "Reload", FF_TYPE_EVENT);
 	SetParamInfof(2, "Unload", FF_TYPE_EVENT);
 	SetParamInfof(3, "Clear Instance", FF_TYPE_EVENT);
@@ -670,6 +673,79 @@ double FFGLTouchEnginePluginBase::DenormalizeFromHost(FFUInt32 paramID, double h
 	return it->second.first + hostValue * (it->second.second - it->second.first);
 }
 
+bool FFGLTouchEnginePluginBase::IsStashableSlot(FFUInt32 ParamID) const {
+	// Only pre-allocated tox slots; the reserved header controls (Tox File,
+	// Reload, ... Idle Seconds) all have handlers of their own above the
+	// not-ready guards, and anything reaching those guards at a reserved index
+	// (e.g. an event slot's 0 on button release) must not be replayed later.
+	if (ParamID < OffsetParamsByType || ParamID >= OffsetParamsByType + MaxParamsByType * 7) {
+		return false;
+	}
+	// Never stash the pulse family — a recalled preset must not fire events.
+	const FFUInt32 pulseBase = OffsetParamsByType + MaxParamsByType * 4;
+	return ParamID < pulseBase || ParamID >= pulseBase + MaxParamsByType;
+}
+
+// Preset recall, second half: override the just-enumerated tox state with the
+// values the host sent while the load was in flight. Runs at the end of
+// GetAllParameters — after the idle-release retained-value restore (an
+// explicit host set is newer intent than that snapshot) and before the final
+// RaiseParamEvent sweep, so the host's re-query reads the preset values back.
+// Marking dirty routes them through the normal push path, whose LastPushFrame
+// stamp keeps the par echo from reverting them.
+void FFGLTouchEnginePluginBase::ApplyPendingHostValues() {
+	for (auto& ParamID : ActiveParams) {
+		auto f = PendingFloatValues.find(ParamID);
+		if (f != PendingFloatValues.end()) {
+			const float value = f->second;
+			PendingFloatValues.erase(f);
+			switch (ParameterMapType[ParamID]) {
+			case FF_TYPE_STANDARD:
+				ParameterMapFloat[ParamID] = DenormalizeFromHost(ParamID, value);
+				break;
+			case FF_TYPE_RED:
+			case FF_TYPE_GREEN:
+			case FF_TYPE_BLUE:
+			case FF_TYPE_ALPHA:
+				// Color slots keep the native 0-1 wire.
+				ParameterMapFloat[ParamID] = value;
+				break;
+			case FF_TYPE_INTEGER:
+			case FF_TYPE_OPTION:
+				ParameterMapInt[ParamID] = static_cast<int32_t>(value);
+				break;
+			case FF_TYPE_BOOLEAN:
+				ParameterMapBool[ParamID] = (value != 0.0f);
+				break;
+			default:
+				continue;
+			}
+			DirtyParams.insert(ParamID);
+			continue;
+		}
+		auto s = PendingTextValues.find(ParamID);
+		if (s != PendingTextValues.end()) {
+			if (ParameterMapType[ParamID] == FF_TYPE_TEXT) {
+				ParameterMapString[ParamID] = s->second;
+				DirtyParams.insert(ParamID);
+			}
+			PendingTextValues.erase(s);
+		}
+	}
+
+	// Whatever is still stashed matched no slot in this tox — a preset saved
+	// against a different (or since-edited) tox. Drop it rather than letting
+	// it land on the next load, but say so: silently absorbing a broken preset
+	// reads as "the preset just doesn't work".
+	if (!PendingFloatValues.empty() || !PendingTextValues.empty()) {
+		const size_t dropped = PendingFloatValues.size() + PendingTextValues.size();
+		FFGLLog::LogToHost((std::string("FFGLTouchEngine: ") + std::to_string(dropped) +
+			" stored preset value(s) matched no parameter in this tox — dropped (preset saved against a different tox layout?)").c_str());
+		PendingFloatValues.clear();
+		PendingTextValues.clear();
+	}
+}
+
 FFResult FFGLTouchEnginePluginBase::SetFloatParameter(unsigned int dwIndex, float value) {
 	std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
 
@@ -698,6 +774,10 @@ FFResult FFGLTouchEnginePluginBase::SetFloatParameter(unsigned int dwIndex, floa
 		isLoadPending = false;
 		isReloadQueued = false;
 		ResetBaseParameters();
+		// An explicit Unload is a reset of host intent too — not a load in
+		// flight whose values should be kept for the next enumeration.
+		PendingFloatValues.clear();
+		PendingTextValues.clear();
 		return FF_SUCCESS;
 	}
 
@@ -710,6 +790,8 @@ FFResult FFGLTouchEnginePluginBase::SetFloatParameter(unsigned int dwIndex, floa
 		// render loop resurrect the tox behind the user's back.
 		EngineReleasedIdle = false;
 		ResetBaseParameters();
+		PendingFloatValues.clear();
+		PendingTextValues.clear();
 		ClearTouchInstance();
 		SetLogStatus("cleared");
 		return FF_SUCCESS;
@@ -740,6 +822,11 @@ FFResult FFGLTouchEnginePluginBase::SetFloatParameter(unsigned int dwIndex, floa
 	}
 
 	if (!isTouchEngineLoaded || !isTouchEngineReady) {
+		// Preset recall: the host sprays every slot's value while the load it
+		// just triggered is still in flight. Keep them for enumeration.
+		if (IsStashableSlot(dwIndex)) {
+			PendingFloatValues[dwIndex] = value;
+		}
 		return FF_SUCCESS;
 	}
 
@@ -779,10 +866,25 @@ FFResult FFGLTouchEnginePluginBase::SetTextParameter(unsigned int dwIndex, const
 	std::lock_guard<std::recursive_mutex> lock(TEStateMutex);
 	switch (dwIndex) {
 	case 0:
-		// Open file dialog
-		FilePath = std::string(value);
+	{
+		const std::string newPath = value != nullptr ? value : "";
+		// Resolume re-sends the identical path on every preset recall. Reloading
+		// then would tear down the live comp (observed to come back
+		// TEResultComponentErrors, leaving a dead instance) — and it re-arms the
+		// not-ready guards right before the preset's parameter values arrive.
+		// Same path + an instance that is loaded or loading = keep it. The
+		// Reload slot remains the way to force a real reload.
+		if (!newPath.empty() && newPath == FilePath && (isTouchEngineLoaded || isLoadPending)) {
+			FFGLLog::LogToHost("FFGLTouchEngine: tox path unchanged — keeping the running instance");
+			return FF_SUCCESS;
+		}
+		// A new load target invalidates values stashed for the previous one.
+		PendingFloatValues.clear();
+		PendingTextValues.clear();
+		FilePath = newPath;
 		LoadTEFile();
 		return FF_SUCCESS;
+	}
 	}
 
 	// The Log slot is a readout. Swallow host writes rather than letting them
@@ -792,6 +894,11 @@ FFResult FFGLTouchEnginePluginBase::SetTextParameter(unsigned int dwIndex, const
 	}
 
 	if (!isTouchEngineLoaded || !isTouchEngineReady) {
+		// Preset recall: the host sprays every slot's value while the load it
+		// just triggered is still in flight. Keep them for enumeration.
+		if (IsStashableSlot(dwIndex)) {
+			PendingTextValues[dwIndex] = value != nullptr ? value : "";
+		}
 		return FF_SUCCESS;
 	}
 
@@ -1358,6 +1465,10 @@ void FFGLTouchEnginePluginBase::GetAllParameters() {
 		RetainedBool.clear();
 		RetainedString.clear();
 	}
+
+	// Preset recall: values the host sent while this load was in flight win
+	// over both the tox's saved state and the retained-value snapshot above.
+	ApplyPendingHostValues();
 
 	// Re-raise value events now that the walk is complete. Enumeration runs on
 	// the TE callback thread while the host UI polls in parallel, so the host

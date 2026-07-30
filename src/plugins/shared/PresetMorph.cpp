@@ -93,7 +93,11 @@ std::vector< std::string > Scan( const std::string& directory )
 	std::error_code ec;
 	for( const auto& entry : std::filesystem::directory_iterator( directory, ec ) )
 	{
-		if( ec || !entry.is_regular_file() )
+		//The ec overload throughout: the throwing overloads abort the HOST on the
+		//kinds of entries a OneDrive-synced folder can serve up (a CRT fail-fast,
+		//not a catchable crash), and a preset scan must never be able to do that.
+		std::error_code entryEc;
+		if( ec || !entry.is_regular_file( entryEc ) || entryEc )
 			continue;
 		//AppleDouble droppings from Mac-synced folders are not presets.
 		if( entry.path().filename().string().rfind( "._", 0 ) == 0 )

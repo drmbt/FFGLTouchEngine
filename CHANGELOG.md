@@ -8,6 +8,32 @@ to the branch that carries it (`fix/stability`, `feat/slot-naming-ranges`,
 `feat/dynamic-params`) and holds the migration and tox-authoring notes. Full
 investigation notes live in [docs/knowledge/](docs/knowledge/README.md).
 
+## v3.6.1 — 2026-07-29 (branch `feat/te-fx-presets`)
+
+### Fixed
+- **Late-registered texture outputs are now picked up.** Engine 2025.33070
+  delivers some output links only after enumeration (long observed for the
+  echo CHOP/DAT, which had a late-registration handler). A late TEXTURE output
+  was silently dropped, leaving `hasVideoOutput` false forever: the FX drew
+  only its input passthrough (black on an empty router) while TE cooked at
+  full rate with healthy stats and no error anywhere — first reproduced live
+  as "the color picker does nothing" on `RGBA.tox`, because the picked color
+  never reached the screen. `TELinkEventAdded` now adopts a late
+  `TELinkTypeTexture` in the output scope, and enumeration logs
+  `video output: <id>` / a warning when no texture output was found.
+- **Preset folder scan can no longer fail-fast the host.** Arena died with
+  `ucrtbase.dll` 0xc0000409 (CRT fail-fast, i.e. an abort, not a segfault)
+  during the first live session. The scanner's `entry.is_regular_file()` used
+  the THROWING overload — on the kinds of entries a OneDrive-synced preset
+  folder can serve up, that abort()s the host. Now the `error_code` overload
+  throughout. (Root cause of the specific crash unconfirmed — this is the one
+  throwing call in the new code's hot path.)
+
+### Added
+- **Color-quad enumeration diagnostics**: one log line per registered quad
+  with the TD identifier, slot range, and both sides of the RGBA→HSBA
+  conversion, so a host-side color mixup is diagnosable from the log alone.
+
 ## v3.6.0 — 2026-07-29 (branch `feat/te-fx-presets`)
 
 ### Added

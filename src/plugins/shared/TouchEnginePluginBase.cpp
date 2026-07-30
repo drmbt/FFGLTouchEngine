@@ -1524,6 +1524,7 @@ void FFGLTouchEnginePluginBase::GetAllParameters() {
 					if (!hasVideoOutput) {
 						OutputOpName = linkInfo->identifier;
 						hasVideoOutput = true;
+						FFGLLog::LogToHost((std::string("FFGLTouchEngine: video output: ") + OutputOpName).c_str());
 					}
 				} else if (linkInfo->type == TELinkTypeFloatBuffer) {
 					// Par-state echo channel (Out CHOP fed by a Par CHOP)
@@ -1541,6 +1542,17 @@ void FFGLTouchEnginePluginBase::GetAllParameters() {
 			}
 		}
 
+	}
+
+	// A tox without a texture output renders as the input passthrough (FX) or
+	// black (source) while everything else — params, cooking, stats — works,
+	// which reads as "the plugin is broken" with no error anywhere. Say it. The
+	// engine can also register the link late (observed on 2025.33070, which
+	// delivers some output links only after enumeration); the TELinkEventAdded
+	// handler picks those up and logs the same way.
+	if (!hasVideoOutput) {
+		FFGLLog::LogToHost("FFGLTouchEngine: no texture output link found at enumeration — "
+			"waiting for a late registration (tox needs an Out TOP named out1)");
 	}
 
 	// An idle release is meant to be invisible apart from the reload delay, but
@@ -1741,6 +1753,17 @@ void FFGLTouchEnginePluginBase::CreateIndividualParameter(const TouchObject<TELi
 					hsba = { 0.0f, 0.0f, 0.0f, linkInfo->count > 3 ? static_cast<float>(value[3]) : 1.0f };
 					drmbt::RgbToHsb(static_cast<float>(value[0]), static_cast<float>(value[1]),
 						static_cast<float>(value[2]), 0.0f, 0.0f, hsba[0], hsba[1], hsba[2]);
+					// One line per quad, at enumeration only: makes a host-side
+					// color mixup diagnosable from the log alone (which slots,
+					// which TD par, and both sides of the conversion).
+					char quadLog[192];
+					snprintf(quadLog, sizeof(quadLog),
+						"FFGLTouchEngine: color quad %s <- '%s' slots %u-%u rgba(%.3f %.3f %.3f %.3f) hsba(%.3f %.3f %.3f %.3f)",
+						StaticSlotName(head).c_str(), linkInfo->identifier,
+						head, head + linkInfo->count - 1,
+						value[0], value[1], value[2], linkInfo->count > 3 ? value[3] : 1.0,
+						hsba[0], hsba[1], hsba[2], hsba[3]);
+					FFGLLog::LogToHost(quadLog);
 				}
 			}
 
@@ -2414,7 +2437,16 @@ void FFGLTouchEnginePluginBase::linkCallback(TELinkEvent event, const char* iden
 			break;
 		}
 		if (linkInfo->domain == TELinkDomainOperator) {
-			if (linkInfo->type == TELinkTypeFloatBuffer && EchoChopIdentifier.empty()) {
+			// The output scope can grow after enumeration (engine 2025.33070
+			// delivers some output links late). A late TEXTURE output used to be
+			// dropped here, leaving hasVideoOutput false forever — the effect
+			// then drew only its input passthrough (black on an empty router)
+			// while TE cooked away happily, with no error anywhere.
+			if (linkInfo->type == TELinkTypeTexture && linkInfo->scope == TEScopeOutput && !hasVideoOutput) {
+				OutputOpName = identifier;
+				hasVideoOutput = true;
+				FFGLLog::LogToHost((std::string("FFGLTouchEngine: video output (late): ") + OutputOpName).c_str());
+			} else if (linkInfo->type == TELinkTypeFloatBuffer && EchoChopIdentifier.empty()) {
 				EchoChopIdentifier = identifier;
 				FFGLLog::LogToHost((std::string("FFGLTouchEngine: par echo CHOP registered (late): ") + EchoChopIdentifier).c_str());
 			} else if (linkInfo->type == TELinkTypeStringData && EchoDatIdentifier.empty()) {
